@@ -2,10 +2,10 @@
 
 ## Current State
 
-- **Base:** `origin/main` at P04 merge `583c91f2`
-- **Current branch:** `setup-aware-plugin-management-disable`
-- **Current slice:** Stage 12-P05 / step 5 of 6, open as PR #570
-- **Next action:** monitor PR #570 and prepare P06 locally
+- **Base:** `origin/main` at P05 merge `92cbdf06`
+- **Current branch:** `setup-aware-plugin-management-commands`
+- **Current slice:** Stage 12-P06 / step 6 of 6, open as PR #572
+- **Next action:** monitor PR #572 through review and CI
 
 ## Delivery
 
@@ -15,8 +15,8 @@
 | [x] | P02 — read-only management snapshots | `setup-aware-plugin-management-read-snapshots` | PR #567 merged as `19ca475a` |
 | [x] | P03 — snapshot tokens and SSE invalidation | `setup-aware-plugin-management-invalidation` | PR #568 merged as `00a0da77` |
 | [x] | P04 — live idle-timeout mutations | `setup-aware-plugin-management-idle-timeouts` | PR #569 merged as `583c91f2` |
-| [x] | P05 — transactional plugin disable | `setup-aware-plugin-management-disable` | PR #570 open; monitoring |
-| [ ] | P06 — remaining commands and dynamic eligibility | `setup-aware-plugin-management-commands` | waits for P05 merge |
+| [x] | P05 — transactional plugin disable | `setup-aware-plugin-management-disable` | PR #570 merged as `92cbdf06` |
+| [x] | P06 — remaining commands and dynamic eligibility | `setup-aware-plugin-management-commands` | PR #572 open; monitoring |
 
 ## Source Material
 
@@ -196,6 +196,53 @@
   `git diff --check`.
 - Pushed and opened PR #570 with the fixed step-5/6 series title; monitoring
   started immediately.
+- Review hardening through `828c7a38` keeps invalid commit and rollback paths
+  settled, reconciles service eligibility after fail-closed commit errors,
+  removes the lifecycle route's bang operator, and switches runtime state
+  derivation directly on the access gate. Focused tests and fatal analysis pass;
+  CI passes 13/13 and Cubic approves the latest reviewed changes.
+
+### 2026-07-26 — P06 remaining commands and dynamic eligibility
+
+- Expanded the shared lifecycle command union with enable, restart, and refresh
+  while preserving strict command discrimination and safe/force stop modes.
+- Added per-slot setup-inspection revision and generation fencing. Disable,
+  authentication loss, newer probes, and generation changes prevent stale setup
+  results from restoring access or overwriting current state.
+- Lifecycle commands now serialize per plugin: enable persists eligibility then
+  inspects and starts only when ready; restart requires eligibility and inspects
+  before restart; refresh inspects without starting. Ready-ID publication is
+  deferred across failed starts so catalog hydration additions remain retryable.
+- Catalog import validation now reads live runtime-backed eligibility while
+  active imports remain cancellable after eligibility removal. The existing
+  additions-only hydration listener imports a newly enabled ready plugin.
+- Correctness review findings for fail-closed eligibility reconciliation,
+  auth-loss access restoration, disabled-plugin cancellation, and generation
+  fencing were fixed. The follow-up review reported no remaining findings.
+- Shared contract tests passed (8), focused bridge tests passed (88), fatal
+  analysis passed in shared and bridge app, and `git diff --check` passed.
+  Aristotle approved the complete architecture-bearing P06 scope with no
+  findings.
+- Merged P05's `92cbdf06` `origin/main` result in `185197c0`, preserving the
+  independently merged client SSE compatibility fix from PR #571. Post-merge
+  verification passed the same 8 shared contract tests, 88 focused bridge
+  tests, both fatal analyzers, and staged/unstaged diff checks.
+- Pushed and opened PR #572 with the fixed step-6/6 series title; monitoring
+  started immediately.
+- Review follow-up `7473fcbd` keeps failed-start hydration readiness deferred
+  across refresh and makes the new/modified lifecycle test helpers follow the
+  required named-parameter convention. Focused service tests and fatal analysis
+  passed; Cubic approved the updated head and CI passed 13/13.
+- End-to-end verification used the PR iOS simulator build, production relay,
+  and the source bridge with `--data-dir ~/.local/share/sesori-dev`. It covered
+  all three real backend CLIs, live enable/disable/refresh/restart, equal-command
+  joining and differing-command conflicts, malformed/unknown requests, dynamic
+  defaults including zero eligible plugins, timeout override/apply-all writes,
+  durable denylist/timeout state across bridge restart, mobile disconnect/re-key,
+  an explicitly setup-blocked Codex runtime, explicit and automatic catalog
+  hydration, durable catalog browsing while plugins were disabled, and mobile
+  new-session eligibility after reopening. All settings were restored, no new
+  simulator crash appeared, and no additional product defect was found.
 
 ## Delivery Rules
 

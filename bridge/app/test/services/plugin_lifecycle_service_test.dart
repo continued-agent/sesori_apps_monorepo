@@ -39,6 +39,7 @@ void main() {
     expect(policy.eligiblePluginIds, ["alpha", "zeta"]);
     expect(policy.defaultPluginId, "alpha");
     expect(service.compositionView.eligiblePluginIds, ["alpha", "zeta"]);
+    expect(service.compositionView.orderedPluginIds, ["alpha", "beta", "zeta"]);
     expect(runtime.snapshot.singleWhere((entry) => entry.pluginId == "beta").state, PluginRuntimeState.disabled);
     expect(runtime.snapshot.singleWhere((entry) => entry.pluginId == "zeta").state, PluginRuntimeState.blocked);
   });
@@ -696,6 +697,194 @@ void main() {
     expect(settingsRepository.loadCalls, isZero);
   });
 
+  test("equal commands join while a different same-plugin command conflicts", () async {
+    final inspectionGate = Completer<void>();
+    final repository = _CommandLifecycleRepository(
+      inspectionResult: const PluginSetupReady(),
+      inspectionGate: inspectionGate,
+      startFailureMessage: null,
+    );
+    addTearDown(repository.dispose);
+    final service = _commandService(repository: repository, settingsRepository: null)
+      ..initialize(
+        disabledPluginIds: const {},
+        setupById: const {"one": PluginSetupReady()},
+      );
+    addTearDown(service.dispose);
+
+    final first = service.command(pluginId: "one", request: const PluginLifecycleCommandRequest.refresh());
+    final joined = service.command(pluginId: "one", request: const PluginLifecycleCommandRequest.refresh());
+    expect(
+      () => service.command(pluginId: "one", request: const PluginLifecycleCommandRequest.enable()),
+      throwsA(
+        isA<PluginManagementConflictException>().having(
+          (error) => error.conflict.reasons,
+          "reasons",
+          [PluginLifecycleConflictReason.transitioning],
+        ),
+      ),
+    );
+
+    inspectionGate.complete();
+    final responses = await Future.wait([first, joined]);
+
+    expect(responses[0], responses[1]);
+    expect(repository.inspectCalls, 1);
+  });
+
+  test("enable persists eligibility, inspects setup, and starts only when ready", () async {
+    final repository = _CommandLifecycleRepository(
+      inspectionResult: const PluginSetupRuntimeMissing(actionHint: "Install"),
+      inspectionGate: null,
+      startFailureMessage: null,
+    );
+    addTearDown(repository.dispose);
+    final settingsRepository = _MutableBridgeSettingsRepository(
+      settings: const BridgeSettings(
+        plugins: BridgePluginSettings(disabledPluginIds: {"one"}),
+      ),
+    );
+    final service = _commandService(repository: repository, settingsRepository: settingsRepository)
+      ..initialize(
+        disabledPluginIds: const {"one"},
+        setupById: const {"one": PluginSetupNotInspected()},
+      );
+    addTearDown(service.dispose);
+
+    final blocked = await service.command(
+      pluginId: "one",
+      request: const PluginLifecycleCommandRequest.enable(),
+    );
+
+    expect(settingsRepository.settings.plugins.isDisabled(pluginId: "one"), isFalse);
+    expect(service.compositionView.eligiblePluginIds, ["one"]);
+    expect(repository.inspectCalls, 1);
+    expect(repository.startCalls, isZero);
+    expect(blocked.plugins.single.setup.state, PluginSetupState.runtimeMissing);
+    expect(blocked.plugins.single.runtimeState, shared.PluginRuntimeState.blocked);
+
+    repository.inspectionResult = const PluginSetupReady();
+    final ready = service.readyPluginIds.firstWhere((ids) => ids.contains("one"));
+    final enabled = await service.command(
+      pluginId: "one",
+      request: const PluginLifecycleCommandRequest.enable(),
+    );
+
+    expect(await ready, ["one"]);
+    expect(repository.startCalls, 1);
+    expect(enabled.plugins.single.runtimeState, shared.PluginRuntimeState.active);
+    expect(settingsRepository.loadCalls, 1);
+  });
+
+  test("failed enable start defers the ready id until a successful retry", () async {
+    final repository = _CommandLifecycleRepository(
+      inspectionResult: const PluginSetupReady(),
+      inspectionGate: null,
+      startFailureMessage: "start failed",
+    );
+    addTearDown(repository.dispose);
+    final service = _commandService(repository: repository, settingsRepository: null)
+      ..initialize(
+        disabledPluginIds: const {"one"},
+        setupById: const {"one": PluginSetupNotInspected()},
+      );
+    addTearDown(service.dispose);
+    final readyEvents = <List<String>>[];
+    final readySubscription = service.readyPluginIds.listen(readyEvents.add);
+    addTearDown(readySubscription.cancel);
+
+    await expectLater(
+      service.command(pluginId: "one", request: const PluginLifecycleCommandRequest.enable()),
+      throwsA(isA<PluginManagementCommandFailedException>()),
+    );
+    expect(readyEvents, everyElement(isNot(contains("one"))));
+
+    await service.command(pluginId: "one", request: const PluginLifecycleCommandRequest.refresh());
+    expect(readyEvents, everyElement(isNot(contains("one"))));
+
+    repository.startFailureMessage = null;
+    await service.command(pluginId: "one", request: const PluginLifecycleCommandRequest.enable());
+
+    expect(readyEvents.last, ["one"]);
+  });
+
+  test("restart requires eligibility and does not replace a newly blocked plugin", () async {
+    final repository = _CommandLifecycleRepository(
+      inspectionResult: const PluginSetupRuntimeMissing(actionHint: "Install"),
+      inspectionGate: null,
+      startFailureMessage: null,
+    );
+    addTearDown(repository.dispose);
+    final service = _commandService(repository: repository, settingsRepository: null)
+      ..initialize(
+        disabledPluginIds: const {},
+        setupById: const {"one": PluginSetupReady()},
+      );
+    addTearDown(service.dispose);
+
+    final response = await service.command(
+      pluginId: "one",
+      request: const PluginLifecycleCommandRequest.restart(mode: PluginStopMode.force),
+    );
+
+    expect(repository.restartCalls, isZero);
+    expect(response.plugins.single.setup.state, PluginSetupState.runtimeMissing);
+    expect(response.plugins.single.runtimeState, shared.PluginRuntimeState.blocked);
+
+    repository.inspectionResult = const PluginSetupReady();
+    final restarted = await service.command(
+      pluginId: "one",
+      request: const PluginLifecycleCommandRequest.restart(mode: PluginStopMode.force),
+    );
+
+    expect(repository.restartCalls, 1);
+    expect(restarted.plugins.single.runtimeState, shared.PluginRuntimeState.active);
+
+    await service.command(
+      pluginId: "one",
+      request: const PluginLifecycleCommandRequest.disable(mode: PluginStopMode.force),
+    );
+    await expectLater(
+      service.command(
+        pluginId: "one",
+        request: const PluginLifecycleCommandRequest.restart(mode: PluginStopMode.safe),
+      ),
+      throwsA(
+        isA<PluginManagementConflictException>().having(
+          (error) => error.conflict.reasons,
+          "reasons",
+          [PluginLifecycleConflictReason.notEnabled],
+        ),
+      ),
+    );
+  });
+
+  test("refresh updates setup and ready ids without starting the plugin", () async {
+    final repository = _CommandLifecycleRepository(
+      inspectionResult: const PluginSetupReady(),
+      inspectionGate: null,
+      startFailureMessage: null,
+    );
+    addTearDown(repository.dispose);
+    final service = _commandService(repository: repository, settingsRepository: null)
+      ..initialize(
+        disabledPluginIds: const {},
+        setupById: const {"one": PluginSetupRuntimeMissing(actionHint: "Install")},
+      );
+    addTearDown(service.dispose);
+    final ready = service.readyPluginIds.firstWhere((ids) => ids.contains("one"));
+
+    final response = await service.command(
+      pluginId: "one",
+      request: const PluginLifecycleCommandRequest.refresh(),
+    );
+
+    expect(await ready, ["one"]);
+    expect(repository.startCalls, isZero);
+    expect(response.plugins.single.setup.state, PluginSetupState.ready);
+    expect(response.plugins.single.runtimeState, shared.PluginRuntimeState.dormant);
+  });
+
   test("runtime snapshots drive selectable metadata and derived default", () async {
     final alpha = _FakePluginApi(id: "alpha");
     final beta = _FakePluginApi(id: "beta");
@@ -920,6 +1109,22 @@ PluginLifecycleService _singleIdleService({
     );
 }
 
+PluginLifecycleService _commandService({
+  required PluginLifecycleRepository repository,
+  required BridgeSettingsRepository? settingsRepository,
+}) {
+  return PluginLifecycleService(
+    lifecycleRepository: repository,
+    preferredDefaultPluginId: legacyMissingPluginId,
+    bridgeSettingsRepository: settingsRepository ?? createTestBridgeSettingsRepository(),
+    idleTimerScheduler: const PluginIdleTimerScheduler(),
+  )..registerPlugins(
+    plugins: const [
+      (id: "one", displayName: "One", residencyPolicy: PluginResidencyPolicy.transient),
+    ],
+  );
+}
+
 class _FakePluginApi extends BridgeDerivedProjectsPluginApi {
   _FakePluginApi({required this.id});
 
@@ -1087,6 +1292,175 @@ class _CommitFailingDisableLifecycleRepository extends _IdleLifecycleRepository 
   void rollbackDisable({required String pluginId}) {
     rollbackCalls++;
   }
+}
+
+class _CommandLifecycleRepository implements PluginLifecycleRepository {
+  _CommandLifecycleRepository({
+    required this.inspectionResult,
+    required this.inspectionGate,
+    required this.startFailureMessage,
+  });
+
+  PluginSetupStatus inspectionResult;
+  final Completer<void>? inspectionGate;
+  String? startFailureMessage;
+  final StreamController<List<PluginLifecycleSnapshot>> _snapshots = StreamController.broadcast(sync: true);
+  PluginLifecycleSnapshot _current = const PluginLifecycleSnapshot(
+    pluginId: "one",
+    projectOwnership: PluginProjectOwnership.native,
+    setup: PluginSetupNotInspected(),
+    accessGate: PluginRuntimeAccessGate.disabled,
+    startAllowed: false,
+    state: PluginRuntimeState.disabled,
+    workState: PluginWorkState.unknown,
+    leaseCount: 0,
+    transitionSettled: true,
+  );
+  int inspectCalls = 0;
+  int startCalls = 0;
+  int restartCalls = 0;
+
+  @override
+  List<PluginLifecycleSnapshot> get snapshot => [_current];
+
+  @override
+  Stream<List<PluginLifecycleSnapshot>> get snapshots => _snapshots.stream;
+
+  @override
+  void applyAccess({required Set<String> eligiblePluginIds, required Set<String> startAllowedPluginIds}) {
+    final enabled = eligiblePluginIds.contains("one");
+    final startAllowed = startAllowedPluginIds.contains("one");
+    _current = _copySnapshot(
+      setup: _current.setup,
+      accessGate: enabled ? PluginRuntimeAccessGate.enabled : PluginRuntimeAccessGate.disabled,
+      startAllowed: startAllowed,
+      state: !enabled
+          ? PluginRuntimeState.disabled
+          : !startAllowed
+          ? PluginRuntimeState.blocked
+          : _current.state == PluginRuntimeState.active
+          ? PluginRuntimeState.active
+          : PluginRuntimeState.dormant,
+      transitionSettled: true,
+    );
+    _publish();
+  }
+
+  @override
+  Future<Map<String, PluginSetupStatus>> inspect({
+    required Set<String> pluginIds,
+    required bool markUnselectedNotInspected,
+  }) async {
+    inspectCalls++;
+    await inspectionGate?.future;
+    _current = _copySnapshot(
+      setup: inspectionResult,
+      accessGate: _current.accessGate,
+      startAllowed: _current.startAllowed,
+      state: _current.state,
+      transitionSettled: true,
+    );
+    _publish();
+    return {"one": inspectionResult};
+  }
+
+  @override
+  Future<PluginRuntimeCommandResult> start({required String pluginId}) async {
+    startCalls++;
+    final failureMessage = startFailureMessage;
+    if (failureMessage != null) {
+      return PluginRuntimeCommandFailed(snapshot: _runtimeSnapshot(), message: failureMessage);
+    }
+    _current = _copySnapshot(
+      setup: _current.setup,
+      accessGate: _current.accessGate,
+      startAllowed: _current.startAllowed,
+      state: PluginRuntimeState.active,
+      transitionSettled: true,
+    );
+    _publish();
+    return PluginRuntimeCommandApplied(snapshot: _runtimeSnapshot());
+  }
+
+  @override
+  Future<PluginRuntimeCommandResult> restart({
+    required String pluginId,
+    required PluginStopIntent intent,
+  }) async {
+    restartCalls++;
+    return start(pluginId: pluginId);
+  }
+
+  @override
+  Future<PluginRuntimeCommandResult> prepareDisable({
+    required String pluginId,
+    required PluginStopIntent intent,
+  }) async {
+    _current = _copySnapshot(
+      setup: _current.setup,
+      accessGate: PluginRuntimeAccessGate.draining,
+      startAllowed: _current.startAllowed,
+      state: PluginRuntimeState.stopping,
+      transitionSettled: false,
+    );
+    _publish();
+    return PluginRuntimeCommandApplied(snapshot: _runtimeSnapshot());
+  }
+
+  @override
+  void commitDisable({required String pluginId}) {
+    _current = _copySnapshot(
+      setup: _current.setup,
+      accessGate: PluginRuntimeAccessGate.disabled,
+      startAllowed: false,
+      state: PluginRuntimeState.disabled,
+      transitionSettled: true,
+    );
+    _publish();
+  }
+
+  @override
+  void rollbackDisable({required String pluginId}) => throw UnsupportedError("unused");
+
+  PluginLifecycleSnapshot _copySnapshot({
+    required PluginSetupStatus setup,
+    required PluginRuntimeAccessGate accessGate,
+    required bool startAllowed,
+    required PluginRuntimeState state,
+    required bool transitionSettled,
+  }) {
+    return PluginLifecycleSnapshot(
+      pluginId: "one",
+      projectOwnership: PluginProjectOwnership.native,
+      setup: setup,
+      accessGate: accessGate,
+      startAllowed: startAllowed,
+      state: state,
+      workState: PluginWorkState.unknown,
+      leaseCount: 0,
+      transitionSettled: transitionSettled,
+    );
+  }
+
+  PluginRuntimeSnapshot _runtimeSnapshot() => PluginRuntimeSnapshot(
+    pluginId: "one",
+    projectOwnership: PluginProjectOwnership.native,
+    setup: _current.setup,
+    accessGate: _current.accessGate,
+    startAllowed: _current.startAllowed,
+    generation: 1,
+    state: _current.state,
+    workState: _current.workState,
+    leaseCount: _current.leaseCount,
+    transition: _current.transitionSettled ? PluginRuntimeTransition.none : PluginRuntimeTransition.stopping,
+  );
+
+  void _publish() => _snapshots.add(snapshot);
+
+  Future<void> dispose() => _snapshots.close();
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
 class _MutableBridgeSettingsRepository implements BridgeSettingsRepository {

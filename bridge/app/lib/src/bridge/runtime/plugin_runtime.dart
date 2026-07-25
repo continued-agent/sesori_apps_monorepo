@@ -158,10 +158,21 @@ class PluginRuntime {
     if (markUnselectedNotInspected) {
       for (final slot in _slots.values) {
         if (!selectedIds.contains(slot.registration.descriptor.id)) {
+          slot.setupInspectionRevision++;
           slot.setup = const PluginSetupNotInspected();
         }
       }
     }
+    final inspections = {
+      for (final pluginId in selectedIds)
+        pluginId: () {
+          final slot = _slots[pluginId]!;
+          return (
+            revision: ++slot.setupInspectionRevision,
+            generation: slot.generation,
+          );
+        }(),
+    };
     final results = await Future.wait(
       selectedIds.map((pluginId) async {
         final slot = _slots[pluginId]!;
@@ -188,7 +199,11 @@ class PluginRuntime {
       }),
     );
     for (final result in results) {
-      _slots[result.pluginId]!.setup = result.setup;
+      final slot = _slots[result.pluginId]!;
+      final inspection = inspections[result.pluginId]!;
+      if (slot.setupInspectionRevision == inspection.revision && slot.generation == inspection.generation) {
+        slot.setup = result.setup;
+      }
     }
     _publishSnapshots();
     return Map<String, PluginSetupStatus>.unmodifiable({
@@ -206,7 +221,7 @@ class PluginRuntime {
       if (slot.accessGate == PluginRuntimeAccessGate.draining) continue;
       slot
         ..accessGate = entry?.gate ?? PluginRuntimeAccessGate.disabled
-        ..startAllowed = entry?.startAllowed ?? false;
+        ..startAllowed = (entry?.startAllowed ?? false) && slot.setup is! PluginSetupAuthenticationRequired;
     }
     _publishSnapshots();
   }
@@ -722,6 +737,7 @@ class PluginRuntime {
       );
     }
     slot.accessGate = PluginRuntimeAccessGate.draining;
+    slot.setupInspectionRevision++;
     _publishSnapshots();
 
     final forceCanTakeOverTransition =
@@ -1404,6 +1420,7 @@ class PluginRuntime {
     required PluginAuthenticationRequiredException failure,
   }) {
     if (slot.generation != generation || !identical(slot.plugin?.api, api)) return;
+    slot.setupInspectionRevision++;
     slot
       ..setup = PluginSetupAuthenticationRequired(actionHint: failure.actionHint)
       ..startAllowed = false
@@ -1568,6 +1585,7 @@ class _PluginRuntimeSlot {
   PluginSetupStatus setup = const PluginSetupUnknown(actionHint: null);
   PluginRuntimeAccessGate accessGate = PluginRuntimeAccessGate.disabled;
   bool startAllowed = false;
+  int setupInspectionRevision = 0;
   int? generation;
   PluginRuntimeState state = PluginRuntimeState.disabled;
   PluginWorkState workState = PluginWorkState.unknown;
