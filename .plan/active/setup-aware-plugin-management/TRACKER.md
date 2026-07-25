@@ -2,10 +2,10 @@
 
 ## Current State
 
-- **Base:** `origin/main` at `19ca475a`
-- **Current branch:** `setup-aware-plugin-management-invalidation`
-- **Current slice:** Stage 12-P03 / step 3 of 6, open for review
-- **Next action:** monitor PR #568; P04 waits for merge
+- **Base:** `origin/main` at P03 merge `00a0da77`
+- **Current branch:** `setup-aware-plugin-management-idle-timeouts`
+- **Current slice:** Stage 12-P04 / step 4 of 6, open as PR #569
+- **Next action:** monitor PR #569 and prepare P05 locally
 
 ## Delivery
 
@@ -13,8 +13,8 @@
 |---|---|---|---|
 | [x] | P01 — attach-only residency and diagnostics | `setup-aware-plugin-management-resident-attach` | PR #563 merged as `f8f05c33` |
 | [x] | P02 — read-only management snapshots | `setup-aware-plugin-management-read-snapshots` | PR #567 merged as `19ca475a` |
-| [x] | P03 — snapshot tokens and SSE invalidation | `setup-aware-plugin-management-invalidation` | PR #568 open; monitoring |
-| [ ] | P04 — live idle-timeout mutations | `setup-aware-plugin-management-idle-timeouts` | waits for P03 merge |
+| [x] | P03 — snapshot tokens and SSE invalidation | `setup-aware-plugin-management-invalidation` | PR #568 merged as `00a0da77` |
+| [x] | P04 — live idle-timeout mutations | `setup-aware-plugin-management-idle-timeouts` | PR #569 open; monitoring |
 | [ ] | P05 — transactional plugin disable | `setup-aware-plugin-management-disable` | waits for P04 merge |
 | [ ] | P06 — remaining commands and dynamic eligibility | `setup-aware-plugin-management-commands` | waits for P05 merge |
 
@@ -57,6 +57,10 @@
   snapshot-token contract, cached snapshot/token coherence, independent
   per-change publication, and unchanged Orchestrator SSE ownership with no
   findings.
+- P04 architecture implementation review approved all seven production files
+  with no findings. Shared request ownership, settings preservation, lifecycle
+  write sequencing, route mapping, and the existing shared-router boundary were
+  accepted.
 
 ## Verification Log
 
@@ -126,9 +130,35 @@
   approved the replacement snapshot-token contract and publication semantics
   with no findings.
 - Committed locally as `1940c969` after PR #567 merged.
+- Pushed and opened PR #568 with the fixed step-3/6 series title; monitoring
+  started immediately.
 - Fixed CI initialization against partial runtime snapshots in `ec79f079` by
   waiting for complete management state before establishing the first baseline.
-- Pushed and opened PR #568 with the fixed step-3/6 series title; monitoring
+- Replaced revisions with opaque snapshot tokens and removed global transition
+  suppression in `e764baa2`, addressing both Codex review findings. Both
+  confirmed-Bot threads were replied to and resolved; refreshed CI passed 13/13
+  and Cubic approved the reviewed head.
+- PR #568 merged as `00a0da77` with 14/14 checks and zero unresolved threads.
+
+### 2026-07-25 — P04 live idle-timeout mutations
+
+- Added strict typed apply-all, set-override, and clear-override requests plus
+  `PATCH /plugin/idle-timeout` on the existing shared router.
+- Lifecycle writes reload, derive, and durably save settings inside one ordered
+  mutation tail before resynchronizing timers or publishing a new management
+  snapshot token.
+- Apply-all clears overrides only for registered plugins, preserving unknown
+  plugin entries and additional properties. Resident plugins retain effective
+  timeout `0` while persisted overrides remain editable.
+- Shared management contract tests passed (6), and focused bridge settings,
+  lifecycle, handler, and Orchestrator tests passed (42).
+- Fatal analysis passed in shared and bridge app; `git diff --check` passed.
+- Aristotle implementation review approved the complete production diff with
+  no architecture findings.
+- Merged P03's `00a0da77` `origin/main` result into the local successor.
+  Post-merge reverification passed the same shared tests (6), focused bridge
+  tests (42), and fatal analyzers before the P04 PR opens.
+- Pushed and opened PR #569 with the fixed step-4/6 series title; monitoring
   started immediately.
 
 ## Delivery Rules
