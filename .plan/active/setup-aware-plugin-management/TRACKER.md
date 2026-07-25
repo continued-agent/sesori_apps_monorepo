@@ -2,18 +2,18 @@
 
 ## Current State
 
-- **Base:** `origin/main` at `f8f05c33`
-- **Current branch:** `setup-aware-plugin-management-read-snapshots`
-- **Current slice:** Stage 12-P02 / step 2 of 6, open for review
-- **Next action:** monitor PR #567 and prepare P03 locally
+- **Base:** `origin/main` at `19ca475a`
+- **Current branch:** `setup-aware-plugin-management-invalidation`
+- **Current slice:** Stage 12-P03 / step 3 of 6, open for review
+- **Next action:** monitor PR #568; P04 waits for merge
 
 ## Delivery
 
 | Done | Slice | Branch | PR state |
 |---|---|---|---|
 | [x] | P01 — attach-only residency and diagnostics | `setup-aware-plugin-management-resident-attach` | PR #563 merged as `f8f05c33` |
-| [x] | P02 — read-only management snapshots | `setup-aware-plugin-management-read-snapshots` | PR #567 open; monitoring |
-| [ ] | P03 — revision and SSE invalidation | `setup-aware-plugin-management-invalidation` | waits for P02 merge |
+| [x] | P02 — read-only management snapshots | `setup-aware-plugin-management-read-snapshots` | PR #567 merged as `19ca475a` |
+| [x] | P03 — snapshot tokens and SSE invalidation | `setup-aware-plugin-management-invalidation` | PR #568 open; monitoring |
 | [ ] | P04 — live idle-timeout mutations | `setup-aware-plugin-management-idle-timeouts` | waits for P03 merge |
 | [ ] | P05 — transactional plugin disable | `setup-aware-plugin-management-disable` | waits for P04 merge |
 | [ ] | P06 — remaining commands and dynamic eligibility | `setup-aware-plugin-management-commands` | waits for P05 merge |
@@ -35,7 +35,7 @@
   dynamic catalog data flow.
 - The permitted specificity recheck passed its gate and rejected two choices.
   Removed the unused replay-latest management snapshot stream; synchronous GET
-  state plus the revision stream are now the only read/change mechanisms.
+  state plus the change-token stream are now the only read/change mechanisms.
 - The other finding requested moving all pre-existing lifecycle construction
   from `BridgeRuntimeRunner` into `Orchestrator`. That considerable refactor is
   outside this management scope and would blur the current bootstrap/session
@@ -49,6 +49,14 @@
 - P02 architecture implementation review approved all 11 changed files with no
   findings. Shared wire ownership, lifecycle mapping, route registration, and
   the existing runner/orchestrator boundary were accepted.
+- The initial P03 architecture implementation review approved all 17 changed
+  files with no findings. Its revision and settled-publication design was later
+  superseded while addressing PR review; the replacement token contract and
+  publication semantics received the permitted second review.
+- The final P03 architecture implementation review approved the replacement
+  snapshot-token contract, cached snapshot/token coherence, independent
+  per-change publication, and unchanged Orchestrator SSE ownership with no
+  findings.
 
 ## Verification Log
 
@@ -94,6 +102,33 @@
   containing human-authored review comments; only fully addressed AI-only
   threads may be resolved automatically.
 - Pushed and opened PR #567 with the fixed step-2/6 series title; monitoring
+  started immediately.
+
+### 2026-07-25 — P03 snapshot tokens and SSE invalidation
+
+- Added a backward-compatible opaque token to management snapshots and a typed
+  `plugin.management.changed` SSE event.
+- Lifecycle publication caches each materially changed public snapshot with a
+  new random 128-bit token before synchronous notification. Transition states
+  and unrelated plugin changes publish independently, and OrchestratorSession
+  remains the sole SSE owner.
+- Existing session-focused client consumers explicitly classify the event as
+  global and ignore it until management state enters the client in a later
+  slice.
+- Shared management/SSE tests passed (43). Focused bridge lifecycle, handler,
+  and Orchestrator coverage passed, including token deduplication, transient
+  state, unrelated-plugin invalidation, and token/GET coherence. Affected
+  module_core tests passed (108).
+- Fatal analysis passed in shared, bridge app, module_core `lib`, and mobile app
+  `lib`; `git diff --check` passed.
+- The initial Aristotle implementation review approved the revision-based
+  working-tree diff with no architecture findings. The permitted final review
+  approved the replacement snapshot-token contract and publication semantics
+  with no findings.
+- Committed locally as `1940c969` after PR #567 merged.
+- Fixed CI initialization against partial runtime snapshots in `ec79f079` by
+  waiting for complete management state before establishing the first baseline.
+- Pushed and opened PR #568 with the fixed step-3/6 series title; monitoring
   started immediately.
 
 ## Delivery Rules

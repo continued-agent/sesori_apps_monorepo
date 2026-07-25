@@ -50,6 +50,11 @@ sealed class SesoriSseEvent with _$SesoriSseEvent {
     required CatalogImportProgress progress,
   }) = SesoriCatalogImportProgress;
 
+  @FreezedUnionValue("plugin.management.changed")
+  const factory SesoriSseEvent.pluginManagementChanged({
+    required String snapshotToken,
+  }) = SesoriPluginManagementChanged;
+
   // ---------------------------------------------------------------------------
   // Session — all implement SesoriSessionEvent
   // ---------------------------------------------------------------------------

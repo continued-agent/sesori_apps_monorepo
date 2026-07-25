@@ -18,6 +18,7 @@ void main() {
 
   test("management response round-trips only read snapshot fields", () {
     const response = PluginManagementResponse(
+      snapshotToken: "snapshot-token",
       defaultPluginId: "opencode",
       defaultIdleTimeoutMins: 30,
       plugins: [plugin],
@@ -28,16 +29,27 @@ void main() {
     final pluginJson = plugins!.single! as Map<String, dynamic>;
 
     expect(PluginManagementResponse.fromJson(json), response);
-    expect(json.keys, unorderedEquals(["defaultPluginId", "defaultIdleTimeoutMins", "plugins"]));
+    expect(json.keys, unorderedEquals(["snapshotToken", "defaultPluginId", "defaultIdleTimeoutMins", "plugins"]));
     expect(
       pluginJson.keys,
       unorderedEquals(["setup", "runtimeState", "workState", "idleTimeoutMins", "hasIdleTimeoutOverride"]),
     );
-    expect(json, isNot(contains("revision")));
+    expect(json["snapshotToken"], "snapshot-token");
     expect(pluginJson, isNot(contains("enabled")));
     expect(pluginJson, isNot(contains("isDefault")));
     expect(json, isNot(contains("authority")));
     expect(json, isNot(contains("order")));
+  });
+
+  test("older management responses decode without a snapshot token", () {
+    final json = const PluginManagementResponse(
+      snapshotToken: null,
+      defaultPluginId: "opencode",
+      defaultIdleTimeoutMins: 30,
+      plugins: [plugin],
+    ).toJson()..remove("snapshotToken");
+
+    expect(PluginManagementResponse.fromJson(json).snapshotToken, isNull);
   });
 
   test("future runtime and work states decode to fail-closed unknown values", () {

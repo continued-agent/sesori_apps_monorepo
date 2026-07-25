@@ -59,6 +59,10 @@ sealed class PluginManagementMetadata with _$PluginManagementMetadata {
 @Freezed(fromJson: true, toJson: true)
 sealed class PluginManagementResponse with _$PluginManagementResponse {
   const factory PluginManagementResponse({
+    // COMPATIBILITY 2026-07-25 (v1.6.1): Stage 12-P02 and older bridge payloads
+    // omit snapshotToken; null means that peer cannot identify snapshot changes.
+    // Make non-null when those bridge versions are unsupported.
+    required String? snapshotToken,
     required String? defaultPluginId,
     required int defaultIdleTimeoutMins,
     required List<PluginManagementMetadata> plugins,
