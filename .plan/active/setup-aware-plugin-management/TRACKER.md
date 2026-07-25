@@ -2,17 +2,17 @@
 
 ## Current State
 
-- **Base:** `origin/main` at `41e03f12`
-- **Current branch:** `setup-aware-plugin-management-resident-attach`
-- **Current slice:** Stage 12-P01 / step 1 of 6
-- **Next action:** monitor PR #563 through CI and review
+- **Base:** `origin/main` at `f8f05c33`
+- **Current branch:** `setup-aware-plugin-management-read-snapshots`
+- **Current slice:** Stage 12-P02 / step 2 of 6, open for review
+- **Next action:** monitor PR #567 and prepare P03 locally
 
 ## Delivery
 
 | Done | Slice | Branch | PR state |
 |---|---|---|---|
-| [x] | P01 — attach-only residency and diagnostics | `setup-aware-plugin-management-resident-attach` | PR #563 open; monitoring |
-| [ ] | P02 — read-only management snapshots | `setup-aware-plugin-management-read-snapshots` | waits for P01 merge |
+| [x] | P01 — attach-only residency and diagnostics | `setup-aware-plugin-management-resident-attach` | PR #563 merged as `f8f05c33` |
+| [x] | P02 — read-only management snapshots | `setup-aware-plugin-management-read-snapshots` | PR #567 open; monitoring |
 | [ ] | P03 — revision and SSE invalidation | `setup-aware-plugin-management-invalidation` | waits for P02 merge |
 | [ ] | P04 — live idle-timeout mutations | `setup-aware-plugin-management-idle-timeouts` | waits for P03 merge |
 | [ ] | P05 — transactional plugin disable | `setup-aware-plugin-management-disable` | waits for P04 merge |
@@ -46,6 +46,9 @@
 - P01 architecture implementation review approved all 17 changed files with no
   findings. The generic descriptor policy, OpenCode-owned interpretation,
   lifecycle timeout ownership, and unchanged runtime boundary were accepted.
+- P02 architecture implementation review approved all 11 changed files with no
+  findings. Shared wire ownership, lifecycle mapping, route registration, and
+  the existing runner/orchestrator boundary were accepted.
 
 ## Verification Log
 
@@ -68,6 +71,30 @@
   no architecture findings.
 - Committed as `f0831886`, pushed, and opened PR #563 with the fixed step-1/6
   series title.
+
+### 2026-07-25 — P02 read-only management snapshots
+
+- Added forward-safe shared runtime/work enums and read-only plugin management
+  response models, including effective timeout and persisted-override facts.
+- Added `PluginLifecycleService.managementSnapshot` and registered
+  `GET /plugin/management` on the shared session router used by relay and debug
+  requests. The read path performs no probes, starts, stops, or writes.
+- Shared contract tests passed (3) and focused bridge lifecycle, handler, and
+  debug-router tests passed (31).
+- `dart analyze --fatal-infos` passed in shared and bridge app.
+  `git diff --check` passed.
+- Aristotle implementation review approved the complete working-tree diff with
+  no architecture findings.
+- Committed locally as `b1b14d43`; merged P01 and `origin/main` into the
+  successor after PR #563 merged.
+- Reverification against merged P01 passed the shared contract tests (3),
+  focused bridge lifecycle/handler/debug-router tests (31), fatal analysis in
+  shared and bridge app, and `git diff --check`.
+- Updated the `address-pr-comments` skill so the agent never resolves a thread
+  containing human-authored review comments; only fully addressed AI-only
+  threads may be resolved automatically.
+- Pushed and opened PR #567 with the fixed step-2/6 series title; monitoring
+  started immediately.
 
 ## Delivery Rules
 
