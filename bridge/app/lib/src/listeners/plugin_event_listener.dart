@@ -24,7 +24,13 @@ class PluginEventListener {
           generation: event.generation,
           event: event.event,
         );
-        unawaited(_dispatcher.dispatchPluginEvent(source: source));
+        unawaited(
+          _dispatcher.dispatchPluginEvent(
+            source: source,
+            allowDuringStop: event.allowDuringStop,
+            terminalHandoffConsumed: event.terminalHandoffConsumed,
+          ),
+        );
       },
       onError: _dispatcher.addSourceError,
     );

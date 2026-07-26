@@ -60,7 +60,15 @@ class BenchmarkPluginRuntime extends PluginRuntime {
   @override
   Stream<SourcedPluginRuntimeEvent> get backendEvents => Rx.merge([
     for (final plugin in _plugins.values)
-      plugin.events.map((event) => (pluginId: plugin.id, generation: 1, event: event)),
+      plugin.events.map(
+        (event) => (
+          pluginId: plugin.id,
+          generation: 1,
+          event: event,
+          allowDuringStop: false,
+          terminalHandoffConsumed: null,
+        ),
+      ),
   ]);
 
   @override

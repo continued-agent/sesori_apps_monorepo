@@ -59,6 +59,7 @@ void main() {
 
     test("drops unknown roots without discovering projects and preserves backend-deleted history", () async {
       final unknown = await service.normalize(
+        allowDuringStop: false,
         source: (
           pluginId: plugin.id,
           generation: 1,
@@ -91,6 +92,7 @@ void main() {
         backendSessionId: "backend-root",
       );
       final deleted = await service.normalize(
+        allowDuringStop: false,
         source: (
           pluginId: plugin.id,
           generation: 1,
@@ -117,6 +119,117 @@ void main() {
       );
     });
 
+    test("only runtime-authorized terminal provenance passes a stopped generation fence", () async {
+      await _insertRoot(
+        database: database,
+        pluginId: plugin.id,
+        sessionId: "stable-root",
+        backendSessionId: "backend-root",
+      );
+      pluginRuntime.generationCurrent = false;
+
+      final spoofed = await service.normalize(
+        allowDuringStop: false,
+        source: (
+          pluginId: plugin.id,
+          generation: 1,
+          projectionUpdatedAt: 1,
+          event: const BridgeSseTerminalHandoff(
+            event: BridgeSseSessionIdle(sessionID: "backend-root"),
+          ),
+        ),
+      );
+
+      expect(spoofed, isEmpty);
+      final output = await service.normalize(
+        allowDuringStop: true,
+        source: (
+          pluginId: plugin.id,
+          generation: 1,
+          projectionUpdatedAt: 2,
+          event: const BridgeSseTerminalHandoff(
+            event: BridgeSseSessionIdle(sessionID: "backend-root"),
+          ),
+        ),
+      );
+      expect(output, hasLength(1));
+      expect(output.single, isA<BridgeSseTerminalHandoff>());
+      expect(
+        ((output.single as BridgeSseTerminalHandoff).event as BridgeSseSessionIdle).sessionID,
+        "stable-root",
+      );
+      expect(
+        await service.normalize(
+          allowDuringStop: false,
+          source: (
+            pluginId: plugin.id,
+            generation: 1,
+            projectionUpdatedAt: 3,
+            event: const BridgeSsePermissionAsked(
+              requestID: "stale",
+              sessionID: "backend-root",
+              displaySessionId: "backend-root",
+              tool: "shell",
+              description: "stale permission",
+            ),
+          ),
+        ),
+        isEmpty,
+      );
+
+      final resolution = await service.normalize(
+        allowDuringStop: true,
+        source: (
+          pluginId: plugin.id,
+          generation: 1,
+          projectionUpdatedAt: 4,
+          event: const BridgeSsePermissionReplied(
+            requestID: "cancelled",
+            sessionID: "backend-root",
+            displaySessionId: "backend-root",
+            reply: "reject",
+          ),
+        ),
+      );
+      final replied = resolution.single as BridgeSsePermissionReplied;
+      expect(replied.sessionID, "stable-root");
+      expect(replied.displaySessionId, "stable-root");
+
+      pluginRuntime.eventGenerationCurrent = false;
+      expect(
+        await service.normalize(
+          allowDuringStop: true,
+          source: (
+            pluginId: plugin.id,
+            generation: 1,
+            projectionUpdatedAt: 5,
+            event: const BridgeSseTerminalHandoff(
+              event: BridgeSseSessionIdle(sessionID: "backend-root"),
+            ),
+          ),
+        ),
+        isEmpty,
+      );
+    });
+
+    test("malformed current-generation session payload fails soft and reports once", () async {
+      final output = await service.normalize(
+        allowDuringStop: false,
+        source: (
+          pluginId: plugin.id,
+          generation: 1,
+          projectionUpdatedAt: 1,
+          event: const BridgeSseSessionUpdated(
+            info: {"id": 1},
+            titleChanged: false,
+          ),
+        ),
+      );
+
+      expect(output, isEmpty);
+      expect(failureReporter.recordedIdentifiers, ["bridge.sse.session_event"]);
+    });
+
     test("recursively drains out-of-order descendants under a durable same-plugin parent", () async {
       await _insertRoot(
         database: database,
@@ -126,6 +239,7 @@ void main() {
       );
 
       final grandchildOutput = await service.normalize(
+        allowDuringStop: false,
         source: (
           pluginId: plugin.id,
           generation: 1,
@@ -144,6 +258,7 @@ void main() {
       expect(eventTracker.length, 1);
 
       final output = await service.normalize(
+        allowDuringStop: false,
         source: (
           pluginId: plugin.id,
           generation: 1,
@@ -187,6 +302,7 @@ void main() {
       );
 
       final output = await service.normalize(
+        allowDuringStop: false,
         source: (
           pluginId: plugin.id,
           generation: 1,
@@ -223,6 +339,7 @@ void main() {
       );
 
       final output = await service.normalize(
+        allowDuringStop: false,
         source: (
           pluginId: plugin.id,
           generation: 1,
@@ -262,6 +379,7 @@ void main() {
       );
 
       final output = await service.normalize(
+        allowDuringStop: false,
         source: (
           pluginId: plugin.id,
           generation: 1,
@@ -294,6 +412,7 @@ void main() {
       );
 
       final output = await service.normalize(
+        allowDuringStop: false,
         source: (
           pluginId: plugin.id,
           generation: 1,
@@ -328,6 +447,7 @@ void main() {
         backendSessionId: "backend-root",
       );
       final created = await service.normalize(
+        allowDuringStop: false,
         source: (
           pluginId: plugin.id,
           generation: 1,
@@ -345,6 +465,7 @@ void main() {
       final child = Session.fromJson((created.single as BridgeSseSessionCreated).info);
 
       final output = await service.normalize(
+        allowDuringStop: false,
         source: (
           pluginId: plugin.id,
           generation: 1,
@@ -380,6 +501,7 @@ void main() {
       );
 
       final output = await service.normalize(
+        allowDuringStop: false,
         source: (
           pluginId: plugin.id,
           generation: 1,
@@ -417,12 +539,14 @@ void main() {
 
       expect(
         await service.normalize(
+          allowDuringStop: false,
           source: (pluginId: plugin.id, generation: 1, projectionUpdatedAt: 10, event: rootEvent),
         ),
         isEmpty,
       );
       expect(
         await service.normalize(
+          allowDuringStop: false,
           source: (pluginId: plugin.id, generation: 1, projectionUpdatedAt: 11, event: childEvent),
         ),
         isEmpty,
@@ -496,6 +620,7 @@ void main() {
       for (final (index, event) in [created, message, part, status].indexed) {
         expect(
           await service.normalize(
+            allowDuringStop: false,
             source: (
               pluginId: plugin.id,
               generation: 1,
@@ -571,12 +696,14 @@ void main() {
 
       expect(
         await service.normalize(
+          allowDuringStop: false,
           source: (pluginId: plugin.id, generation: 1, projectionUpdatedAt: 12, event: created),
         ),
         isEmpty,
       );
       expect(
         await service.normalize(
+          allowDuringStop: false,
           source: (pluginId: plugin.id, generation: 1, projectionUpdatedAt: 13, event: updated),
         ),
         isEmpty,
@@ -623,6 +750,7 @@ void main() {
 
       expect(
         await service.normalize(
+          allowDuringStop: false,
           source: (pluginId: plugin.id, generation: 1, projectionUpdatedAt: 12, event: created),
         ),
         isEmpty,
@@ -630,6 +758,7 @@ void main() {
       pluginRuntime.currentGeneration = 2;
       expect(
         await service.normalize(
+          allowDuringStop: false,
           source: (pluginId: plugin.id, generation: 2, projectionUpdatedAt: 13, event: updated),
         ),
         isEmpty,
@@ -692,24 +821,28 @@ void main() {
 
       expect(
         await service.normalize(
+          allowDuringStop: false,
           source: (pluginId: plugin.id, generation: 1, projectionUpdatedAt: 20, event: rootEvent),
         ),
         isEmpty,
       );
       expect(
         await service.normalize(
+          allowDuringStop: false,
           source: (pluginId: plugin.id, generation: 1, projectionUpdatedAt: 21, event: childEvent),
         ),
         isEmpty,
       );
       expect(
         await service.normalize(
+          allowDuringStop: false,
           source: (pluginId: plugin.id, generation: 1, projectionUpdatedAt: 22, event: rootPermissionEvent),
         ),
         isEmpty,
       );
       expect(
         await service.normalize(
+          allowDuringStop: false,
           source: (pluginId: plugin.id, generation: 1, projectionUpdatedAt: 23, event: childPermissionEvent),
         ),
         isEmpty,
@@ -777,6 +910,7 @@ void main() {
       for (var index = 0; index < events.length; index++) {
         expect(
           await service.normalize(
+            allowDuringStop: false,
             source: (
               pluginId: plugin.id,
               generation: 1,
@@ -830,6 +964,7 @@ void main() {
       );
 
       final output = await service.normalize(
+        allowDuringStop: false,
         source: (
           pluginId: plugin.id,
           generation: 1,
@@ -870,6 +1005,7 @@ void main() {
       sessionDao.gateNextProjectionTransaction();
 
       final normalization = service.normalize(
+        allowDuringStop: false,
         source: (
           pluginId: plugin.id,
           generation: 1,
@@ -910,6 +1046,7 @@ void main() {
       sessionDao.gateNextProjectionTransaction();
 
       final normalization = service.normalize(
+        allowDuringStop: false,
         source: (
           pluginId: plugin.id,
           generation: 1,
@@ -949,6 +1086,7 @@ void main() {
       sessionDao.gateNextProjectionTransaction();
 
       final update = service.normalize(
+        allowDuringStop: false,
         source: (
           pluginId: plugin.id,
           generation: 1,
@@ -977,6 +1115,7 @@ void main() {
 
       sessionDao.gateNextProjectionTransaction();
       final childCreation = service.normalize(
+        allowDuringStop: false,
         source: (
           pluginId: plugin.id,
           generation: 1,

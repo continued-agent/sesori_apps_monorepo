@@ -5,6 +5,16 @@ sealed class BridgeSseEvent {
   const BridgeSseEvent();
 }
 
+/// Mapping provenance for reconciliation synthesized during a forced stop.
+///
+/// This wrapper carries no stop-fence authority. The generation runtime owns
+/// that authorization separately, so a plugin-emitted wrapper remains an
+/// ordinary fenced event.
+class BridgeSseTerminalHandoff extends BridgeSseEvent {
+  final BridgeSseEvent event;
+  const BridgeSseTerminalHandoff({required this.event});
+}
+
 class BridgeSseServerConnected extends BridgeSseEvent {
   const BridgeSseServerConnected();
 }

@@ -5,6 +5,7 @@ import "../models/codex_collaboration_mode.dart";
 import "models/codex_collaboration_mode_dto.dart";
 import "models/codex_skill_dto.dart";
 import "models/codex_thread_dto.dart";
+import "models/codex_turn_dto.dart";
 import "models/codex_turn_input_dto.dart";
 
 /// Layer-1 typed boundary for migrated Codex app-server operations.
@@ -54,7 +55,7 @@ class CodexAppServerApi {
     );
   }
 
-  Future<void> startTurn({
+  Future<CodexTurnStartResponseDto> startTurn({
     required String threadId,
     required List<CodexTurnInputDto> input,
     required String? model,
@@ -84,7 +85,14 @@ class CodexAppServerApi {
         ),
       ).toJson();
     }
-    await _client.request(method: "turn/start", params: params);
+    final result = await _client.request(method: "turn/start", params: params);
+    if (result is! Map) {
+      throw StateError(
+        "expected a Codex turn response object from turn/start, got "
+        "${result.runtimeType}",
+      );
+    }
+    return CodexTurnStartResponseDto.fromJson(result.cast<String, dynamic>());
   }
 
   Future<void> compactThread({required String threadId}) async {

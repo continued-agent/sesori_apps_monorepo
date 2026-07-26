@@ -55,7 +55,9 @@ class TestPluginRuntime extends PluginRuntime {
   final Map<String, PluginRuntimeState> _states = {};
   final Map<String, PluginRuntimeTransition> _transitions = {};
   final StreamController<List<PluginRuntimeSnapshot>> _snapshotChanges = StreamController.broadcast(sync: true);
+  final StreamController<SourcedPluginRuntimeEvent> _runtimeEvents = StreamController.broadcast(sync: true);
   bool generationCurrent = true;
+  bool eventGenerationCurrent = true;
   int currentGeneration = 1;
 
   @override
@@ -70,6 +72,21 @@ class TestPluginRuntime extends PluginRuntime {
   @override
   bool isCurrentGeneration({required String pluginId, required int generation}) {
     return generationCurrent && generation == currentGeneration && _plugins.containsKey(pluginId);
+  }
+
+  @override
+  bool isCurrentEventGeneration({required String pluginId, required int generation}) {
+    return eventGenerationCurrent && generation == currentGeneration && _plugins.containsKey(pluginId);
+  }
+
+  @override
+  bool isCurrentEvent({
+    required String pluginId,
+    required int generation,
+    required bool allowDuringStop,
+  }) {
+    return isCurrentGeneration(pluginId: pluginId, generation: generation) ||
+        (allowDuringStop && isCurrentEventGeneration(pluginId: pluginId, generation: generation));
   }
 
   @override
@@ -113,8 +130,32 @@ class TestPluginRuntime extends PluginRuntime {
   Stream<SourcedPluginRuntimeEvent> get backendEvents {
     return Rx.merge([
       for (final plugin in _plugins.values)
-        plugin.events.map((event) => (pluginId: plugin.id, generation: currentGeneration, event: event)),
+        plugin.events.map(
+          (event) => (
+            pluginId: plugin.id,
+            generation: currentGeneration,
+            event: event,
+            allowDuringStop: false,
+            terminalHandoffConsumed: null,
+          ),
+        ),
+      _runtimeEvents.stream,
     ]);
+  }
+
+  void emitRuntimeEvent({
+    required String pluginId,
+    required BridgeSseEvent event,
+    required bool allowDuringStop,
+    required Completer<void>? terminalHandoffConsumed,
+  }) {
+    _runtimeEvents.add((
+      pluginId: pluginId,
+      generation: currentGeneration,
+      event: event,
+      allowDuringStop: allowDuringStop,
+      terminalHandoffConsumed: terminalHandoffConsumed,
+    ));
   }
 
   @override
@@ -127,6 +168,7 @@ class TestPluginRuntime extends PluginRuntime {
 
   @override
   Future<void> dispose() async {
+    if (!_runtimeEvents.isClosed) await _runtimeEvents.close();
     if (!_snapshotChanges.isClosed) await _snapshotChanges.close();
   }
 
@@ -224,6 +266,16 @@ class _AlwaysCurrentTestPluginRuntime extends TestPluginRuntime {
 
   @override
   bool isCurrentGeneration({required String pluginId, required int generation}) => generation == 1;
+
+  @override
+  bool isCurrentEventGeneration({required String pluginId, required int generation}) => generation == 1;
+
+  @override
+  bool isCurrentEvent({
+    required String pluginId,
+    required int generation,
+    required bool allowDuringStop,
+  }) => generation == 1;
 }
 
 class _UnusedGenerationFactory implements PluginGenerationFactory {

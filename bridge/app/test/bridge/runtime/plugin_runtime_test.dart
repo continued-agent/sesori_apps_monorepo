@@ -409,6 +409,350 @@ void main() {
     expect(runtime.snapshot.single.state, PluginRuntimeState.active);
   });
 
+  test("a force stop interrupts active sessions before retiring the generation", () async {
+    final api = _FakeApi(
+      activeSessionsSummary: const [
+        PluginProjectActivitySummary(
+          id: "project",
+          activeSessions: [
+            PluginActiveSession(
+              id: "snapshot",
+              mainAgentRunning: true,
+              childSessionIds: ["snapshot-child"],
+            ),
+          ],
+        ),
+      ],
+    );
+    late _FakePlugin plugin;
+    final factory = _FakeGenerationFactory(
+      startGate: Future<void>.value(),
+      pluginFactory: (_) => plugin = _FakePlugin(api: api),
+    );
+    final runtime = _runtime(factory: factory);
+    addTearDown(runtime.dispose);
+    await runtime.start(pluginId: "one");
+    plugin.workStates.add(PluginWorkState.busy);
+    await _waitUntil(() => runtime.snapshot.single.workState == PluginWorkState.busy);
+    final events = <SourcedPluginRuntimeEvent>[];
+    final eventSubscription = runtime.backendEvents.listen((event) {
+      events.add(event);
+      final consumed = event.terminalHandoffConsumed;
+      if (consumed != null && !consumed.isCompleted) consumed.complete();
+    });
+    plugin.interruptActiveWorkHandler = (budget) async {
+      plugin.workStates.add(PluginWorkState.idle);
+      return {"busy", "retry"};
+    };
+
+    final result = await runtime.stop(pluginId: "one", intent: PluginStopIntent.force);
+
+    expect(result, isA<PluginRuntimeCommandApplied>());
+    expect(plugin.interruptActiveWorkCount, 1);
+    expect(
+      events,
+      everyElement(
+        isA<SourcedPluginRuntimeEvent>().having((event) => event.allowDuringStop, "allowDuringStop", isTrue),
+      ),
+    );
+    final handoffEvents = events.map((event) => (event.event as BridgeSseTerminalHandoff).event).toList();
+    expect(
+      handoffEvents.whereType<BridgeSseSessionIdle>().map((event) => event.sessionID),
+      unorderedEquals(["snapshot", "snapshot-child", "busy", "retry"]),
+    );
+    expect(handoffEvents.whereType<BridgeSseProjectUpdated>(), hasLength(1));
+    expect(runtime.isCurrentGeneration(pluginId: "one", generation: 1), isFalse);
+    expect(runtime.isCurrentEventGeneration(pluginId: "one", generation: 1), isTrue);
+    expect(
+      runtime.isCurrentEvent(
+        pluginId: "one",
+        generation: 1,
+        allowDuringStop: true,
+      ),
+      isTrue,
+    );
+    expect(
+      runtime.isCurrentEvent(
+        pluginId: "one",
+        generation: 1,
+        allowDuringStop: false,
+      ),
+      isFalse,
+    );
+
+    await runtime.start(pluginId: "one");
+    expect(runtime.isCurrentEventGeneration(pluginId: "one", generation: 1), isFalse);
+    await eventSubscription.cancel();
+  });
+
+  test("a failed interruption does not synthesize idle handoff", () async {
+    final api = _FakeApi(
+      activeSessionsSummary: const [
+        PluginProjectActivitySummary(
+          id: "project",
+          activeSessions: [PluginActiveSession(id: "busy", mainAgentRunning: true)],
+        ),
+      ],
+    );
+    late _FakePlugin plugin;
+    final factory = _FakeGenerationFactory(
+      startGate: Future<void>.value(),
+      pluginFactory: (_) => plugin = _FakePlugin(api: api),
+    );
+    final runtime = _runtime(factory: factory);
+    addTearDown(runtime.dispose);
+    await runtime.start(pluginId: "one");
+    plugin.workStates.add(PluginWorkState.busy);
+    await _waitUntil(() => runtime.snapshot.single.workState == PluginWorkState.busy);
+    final events = <SourcedPluginRuntimeEvent>[];
+    final eventSubscription = runtime.backendEvents.listen(events.add);
+    plugin.interruptActiveWorkHandler = (_) => Future.error(StateError("cannot quiesce"));
+
+    expect(
+      await runtime.stop(pluginId: "one", intent: PluginStopIntent.force),
+      isA<PluginRuntimeCommandApplied>(),
+    );
+
+    expect(plugin.interruptActiveWorkCount, 1);
+    expect(events, isEmpty);
+    await eventSubscription.cancel();
+  });
+
+  test("a force stop reconciles the pre-barrier snapshot when work naturally becomes idle", () async {
+    final api = _FakeApi(
+      activeSessionsSummary: const [
+        PluginProjectActivitySummary(
+          id: "project",
+          activeSessions: [
+            PluginActiveSession(
+              id: "root",
+              mainAgentRunning: true,
+              childSessionIds: ["child"],
+            ),
+          ],
+        ),
+      ],
+    );
+    late _FakePlugin plugin;
+    final factory = _FakeGenerationFactory(
+      startGate: Future<void>.value(),
+      pluginFactory: (_) => plugin = _FakePlugin(api: api),
+    );
+    final runtime = _runtime(factory: factory);
+    addTearDown(runtime.dispose);
+    await runtime.start(pluginId: "one");
+    plugin.workStates.add(PluginWorkState.busy);
+    await _waitUntil(() => runtime.snapshot.single.workState == PluginWorkState.busy);
+    final operationStarted = Completer<void>();
+    final operationGate = Completer<void>();
+    final operation = runtime.use<void>(
+      pluginId: "one",
+      operation: _TestOperation.use,
+      body: (_) async {
+        operationStarted.complete();
+        await operationGate.future;
+      },
+    );
+    final operationCompletion = expectLater(operation, throwsA(isA<PluginOperationException>()));
+    await operationStarted.future;
+    final events = <SourcedPluginRuntimeEvent>[];
+    final eventSubscription = runtime.backendEvents.listen((event) {
+      events.add(event);
+      final consumed = event.terminalHandoffConsumed;
+      if (consumed != null && !consumed.isCompleted) consumed.complete();
+    });
+
+    final stopping = runtime.stop(pluginId: "one", intent: PluginStopIntent.force);
+    await _waitUntil(() => api.getActiveSessionsSummaryCount == 1);
+    plugin.workStates.add(PluginWorkState.idle);
+    operationGate.complete();
+    await operationCompletion;
+
+    expect(await stopping, isA<PluginRuntimeCommandApplied>());
+    expect(plugin.interruptActiveWorkCount, 0);
+    final handoffEvents = events.map((event) => (event.event as BridgeSseTerminalHandoff).event).toList();
+    expect(
+      handoffEvents.whereType<BridgeSseSessionIdle>().map((event) => event.sessionID),
+      unorderedEquals(["root", "child"]),
+    );
+    expect(handoffEvents.last, isA<BridgeSseProjectUpdated>());
+    expect(events.last.terminalHandoffConsumed, isNotNull);
+
+    await eventSubscription.cancel();
+  });
+
+  test("only pending-input resolutions emitted during interruption are authorized", () async {
+    final api = _FakeApi();
+    late _FakePlugin plugin;
+    final factory = _FakeGenerationFactory(
+      startGate: Future<void>.value(),
+      pluginFactory: (_) => plugin = _FakePlugin(api: api),
+    );
+    final runtime = _runtime(factory: factory);
+    addTearDown(runtime.dispose);
+    await runtime.start(pluginId: "one");
+    final events = <SourcedPluginRuntimeEvent>[];
+    final sentinelArrived = Completer<SourcedPluginRuntimeEvent>();
+    final eventSubscription = runtime.backendEvents.listen((event) {
+      events.add(event);
+      if (event.terminalHandoffConsumed != null && !sentinelArrived.isCompleted) {
+        sentinelArrived.complete(event);
+      }
+    });
+    api.eventsController.add(
+      const BridgeSsePermissionReplied(
+        requestID: "before",
+        sessionID: "busy",
+        displaySessionId: "busy",
+        reply: "reject",
+      ),
+    );
+    await _waitUntil(() => events.isNotEmpty);
+    plugin.workStates.add(PluginWorkState.busy);
+    await _waitUntil(() => runtime.snapshot.single.workState == PluginWorkState.busy);
+    plugin.interruptActiveWorkHandler = (_) async {
+      api.eventsController
+        ..add(
+          const BridgeSsePermissionAsked(
+            requestID: "ask",
+            sessionID: "busy",
+            displaySessionId: "busy",
+            tool: "shell",
+            description: "must remain fenced",
+          ),
+        )
+        ..add(
+          const BridgeSsePermissionReplied(
+            requestID: "permission",
+            sessionID: "busy",
+            displaySessionId: "busy",
+            reply: "reject",
+          ),
+        )
+        ..add(
+          const BridgeSseQuestionReplied(
+            requestID: "question-replied",
+            sessionID: "busy",
+            displaySessionId: "busy",
+          ),
+        )
+        ..add(
+          const BridgeSseTerminalHandoff(
+            event: BridgeSsePermissionReplied(
+              requestID: "spoofed",
+              sessionID: "busy",
+              displaySessionId: "busy",
+              reply: "reject",
+            ),
+          ),
+        );
+      scheduleMicrotask(
+        () => api.eventsController.add(
+          const BridgeSseQuestionRejected(
+            requestID: "question-rejected",
+            sessionID: "busy",
+            displaySessionId: "busy",
+          ),
+        ),
+      );
+      plugin.workStates.add(PluginWorkState.idle);
+      return const <String>{};
+    };
+
+    final stopping = runtime.stop(pluginId: "one", intent: PluginStopIntent.force);
+    final sentinel = await sentinelArrived.future.timeout(const Duration(seconds: 1));
+    expect(
+      (sentinel.event as BridgeSseTerminalHandoff).event,
+      isA<BridgeSseProjectUpdated>(),
+    );
+    expect(
+      events.indexOf(sentinel),
+      greaterThan(events.lastIndexWhere((event) => event.event is BridgeSseQuestionRejected)),
+    );
+    api.eventsController.add(
+      const BridgeSsePermissionReplied(
+        requestID: "after",
+        sessionID: "busy",
+        displaySessionId: "busy",
+        reply: "reject",
+      ),
+    );
+    await _waitUntil(
+      () => events.where((event) => event.event is BridgeSsePermissionReplied).length == 3,
+    );
+    sentinel.terminalHandoffConsumed!.complete();
+    expect(await stopping, isA<PluginRuntimeCommandApplied>());
+
+    expect(
+      events.where((event) => event.event is BridgeSsePermissionReplied).map((event) => event.allowDuringStop),
+      [false, true, false],
+    );
+    expect(
+      events.singleWhere((event) => event.event is BridgeSsePermissionAsked).allowDuringStop,
+      isFalse,
+    );
+    expect(
+      events.singleWhere((event) => event.event is BridgeSseQuestionReplied).allowDuringStop,
+      isTrue,
+    );
+    expect(
+      events.singleWhere((event) => event.event is BridgeSseQuestionRejected).allowDuringStop,
+      isTrue,
+    );
+    expect(
+      events
+          .singleWhere(
+            (event) =>
+                event.event is BridgeSseTerminalHandoff &&
+                (event.event as BridgeSseTerminalHandoff).event is BridgeSsePermissionReplied,
+          )
+          .allowDuringStop,
+      isFalse,
+    );
+    expect(sentinel.allowDuringStop, isTrue);
+
+    await eventSubscription.cancel();
+  });
+
+  test("a force restart waits for terminal handoff consumption before starting its successor", () async {
+    late _FakePlugin firstPlugin;
+    final factory = _FakeGenerationFactory(
+      startGate: Future<void>.value(),
+      pluginFactory: (generation) {
+        final plugin = _FakePlugin(api: _FakeApi());
+        if (generation == 1) firstPlugin = plugin;
+        return plugin;
+      },
+    );
+    final runtime = _runtime(factory: factory);
+    addTearDown(runtime.dispose);
+    await runtime.start(pluginId: "one");
+    firstPlugin.workStates.add(PluginWorkState.busy);
+    await _waitUntil(() => runtime.snapshot.single.workState == PluginWorkState.busy);
+    firstPlugin.interruptActiveWorkHandler = (_) async {
+      firstPlugin.workStates.add(PluginWorkState.idle);
+      return {"busy"};
+    };
+    final terminalHandoff = Completer<SourcedPluginRuntimeEvent>();
+    final subscription = runtime.backendEvents.listen((event) {
+      if (event.terminalHandoffConsumed != null && !terminalHandoff.isCompleted) {
+        terminalHandoff.complete(event);
+      }
+    });
+
+    final restarting = runtime.restart(pluginId: "one", intent: PluginStopIntent.force);
+    final handoff = await terminalHandoff.future.timeout(const Duration(seconds: 1));
+
+    expect(factory.startCount, 1);
+    expect(runtime.snapshot.single.transition, PluginRuntimeTransition.restarting);
+    handoff.terminalHandoffConsumed!.complete();
+    expect(await restarting, isA<PluginRuntimeCommandApplied>());
+    expect(factory.startCount, 2);
+    expect(runtime.snapshot.single.generation, 2);
+
+    await subscription.cancel();
+  });
+
   test("prepare disable fences starts until rollback restores access", () async {
     final factory = _FakeGenerationFactory(startGate: Future<void>.value());
     final runtime = _runtime(factory: factory);
@@ -687,7 +1031,7 @@ void main() {
     await disposing;
   });
 
-  test("a force stop fences an operation that completes after shutdown", () async {
+  test("a force stop drains a pre-fence operation before retiring the generation", () async {
     final operationGate = Completer<void>();
     final factory = _FakeGenerationFactory(startGate: Future<void>.value());
     final runtime = _runtime(factory: factory);
@@ -700,10 +1044,14 @@ void main() {
     );
     await _waitUntil(() => runtime.snapshot.single.leaseCount == 1);
 
-    expect(
-      await runtime.stop(pluginId: "one", intent: PluginStopIntent.force),
-      isA<PluginRuntimeCommandApplied>(),
-    );
+    var stopCompleted = false;
+    final stopping = runtime.stop(pluginId: "one", intent: PluginStopIntent.force).whenComplete(() {
+      stopCompleted = true;
+    });
+    await _waitUntil(() => runtime.snapshot.single.transition == PluginRuntimeTransition.stopping);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(stopCompleted, isFalse);
     operationGate.complete();
 
     await expectLater(
@@ -716,6 +1064,7 @@ void main() {
         ),
       ),
     );
+    expect(await stopping, isA<PluginRuntimeCommandApplied>());
     expect(runtime.snapshot.single.state, PluginRuntimeState.dormant);
   });
 
@@ -1189,6 +1538,8 @@ class _FakePlugin implements BridgePlugin {
   Future<void>? _shutdownFuture;
   int shutdownInvocationCount = 0;
   int shutdownCount = 0;
+  int interruptActiveWorkCount = 0;
+  Future<Set<String>> Function(Duration budget)? interruptActiveWorkHandler;
 
   @override
   final _FakeApi api;
@@ -1209,6 +1560,12 @@ class _FakePlugin implements BridgePlugin {
   PluginDiagnostics describe() => const PluginDiagnostics(pluginId: "one", endpoint: null, details: {});
 
   @override
+  Future<Set<String>> interruptActiveWork({required Duration budget}) async {
+    interruptActiveWorkCount++;
+    return await interruptActiveWorkHandler?.call(budget) ?? const {};
+  }
+
+  @override
   Future<void> shutdown({required Duration? budget}) {
     shutdownInvocationCount++;
     return _shutdownFuture ??= _shutdown();
@@ -1226,17 +1583,29 @@ class _FakePlugin implements BridgePlugin {
 }
 
 class _FakeApi extends NativeProjectsPluginApi {
-  _FakeApi({this.id = "one", this.closeEventsOnDispose = false});
+  _FakeApi({
+    this.id = "one",
+    this.closeEventsOnDispose = false,
+    this.activeSessionsSummary = const [],
+  });
 
   final StreamController<BridgeSseEvent> eventsController = StreamController.broadcast();
   final bool closeEventsOnDispose;
+  final List<PluginProjectActivitySummary> activeSessionsSummary;
   int disposeCount = 0;
+  int getActiveSessionsSummaryCount = 0;
 
   @override
   final String id;
 
   @override
   Stream<BridgeSseEvent> get events => eventsController.stream;
+
+  @override
+  List<PluginProjectActivitySummary> getActiveSessionsSummary() {
+    getActiveSessionsSummaryCount++;
+    return activeSessionsSummary;
+  }
 
   @override
   Future<void> dispose() async {

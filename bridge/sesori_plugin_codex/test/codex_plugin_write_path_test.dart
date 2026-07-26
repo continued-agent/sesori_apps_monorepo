@@ -92,7 +92,11 @@ void main() {
             },
           },
         ),
-        const _Response(result: {"turnId": "u-1"}),
+        const _Response(
+          result: {
+            "turn": {"id": "u-1"},
+          },
+        ),
       ]);
 
       final session = await plugin.createSession(
@@ -146,7 +150,11 @@ void main() {
             "model": "gpt-5.4",
           },
         ),
-        const _Response(result: {"turnId": "u-skill"}),
+        const _Response(
+          result: {
+            "turn": {"id": "u-skill"},
+          },
+        ),
         const _Response(result: {}),
       ]);
 
@@ -207,7 +215,11 @@ void main() {
             },
           },
         ),
-        const _Response(result: {"turnId": "u-1"}),
+        const _Response(
+          result: {
+            "turn": {"id": "u-1"},
+          },
+        ),
       ]);
       // codex can emit a cwd-less notification while turn/start is still in
       // flight and before any rollout exists on disk — the thread directory
@@ -295,7 +307,11 @@ void main() {
             "thread": {"id": "t-empty-rollout"},
           },
         ),
-        const _Response(result: {"turnId": "u-1"}),
+        const _Response(
+          result: {
+            "turn": {"id": "u-1"},
+          },
+        ),
         emptyRolloutResponse,
         emptyRolloutResponse,
         emptyRolloutResponse,
@@ -385,7 +401,11 @@ void main() {
             "thread": {"id": "t-existing"},
           },
         ),
-        const _Response(result: {"turnId": "u-1"}),
+        const _Response(
+          result: {
+            "turn": {"id": "u-1"},
+          },
+        ),
       ]);
 
       await plugin.sendPrompt(
@@ -413,7 +433,11 @@ void main() {
             "thread": {"id": "t-default-mode"},
           },
         ),
-        const _Response(result: {"turnId": "u-default"}),
+        const _Response(
+          result: {
+            "turn": {"id": "u-default"},
+          },
+        ),
       ]);
 
       await plugin.sendPrompt(
@@ -483,7 +507,11 @@ void main() {
             "thread": {"id": sessionId, "modelProvider": "openai"},
           },
         ),
-        const _Response(result: {"turnId": "u-resolved"}),
+        const _Response(
+          result: {
+            "turn": {"id": "u-resolved"},
+          },
+        ),
       ]);
       final events = <BridgeSseEvent>[];
       final subscription = resolvedPlugin.events.listen(events.add);
@@ -520,7 +548,11 @@ void main() {
             "thread": {"id": "t-command"},
           },
         ),
-        const _Response(result: {"turnId": "u-command"}),
+        const _Response(
+          result: {
+            "turn": {"id": "u-command"},
+          },
+        ),
       ]);
 
       await plugin.sendCommand(
@@ -534,6 +566,55 @@ void main() {
       );
 
       expect(plugin.currentWorkState, PluginWorkState.busy);
+    });
+
+    test("forced interruption includes an accepted command before turn/started arrives", () async {
+      fake.respondInOrder([
+        const _Response(result: _initOk),
+        const _Response(
+          result: {
+            "thread": {"id": "t-command-force"},
+          },
+        ),
+        const _Response(
+          result: {
+            "turn": {"id": "u-command-force"},
+          },
+        ),
+        const _Response(result: null),
+      ]);
+      await plugin.sendCommand(
+        sessionId: "t-command-force",
+        command: "review",
+        arguments: "recent changes",
+        userVisibleArguments: null,
+        variant: null,
+        agent: null,
+        model: null,
+      );
+      var interruptionCompleted = false;
+
+      final interruption = plugin
+          .interruptActiveWork(budget: const Duration(seconds: 2))
+          .whenComplete(() => interruptionCompleted = true);
+      for (var attempt = 0; attempt < 100 && !fake.sentMethods.contains("turn/interrupt"); attempt++) {
+        await Future<void>.delayed(Duration.zero);
+      }
+
+      expect(fake.sentMethods, contains("turn/interrupt"));
+      expect(fake.sentParamsFor("turn/interrupt"), {
+        "threadId": "t-command-force",
+        "turnId": "u-command-force",
+      });
+      expect(interruptionCompleted, isFalse);
+
+      fake.pushNotification("turn/completed", {
+        "threadId": "t-command-force",
+        "turn": {"id": "u-command-force"},
+      });
+
+      expect(await interruption, {"t-command-force"});
+      expect(plugin.currentWorkState, PluginWorkState.idle);
     });
 
     test("turn/start rejection does not mark the plugin busy", () async {
@@ -571,7 +652,11 @@ void main() {
             "thread": {"id": "t-delayed"},
           },
         ),
-        const _Response(result: {"turnId": "u-delayed"}),
+        const _Response(
+          result: {
+            "turn": {"id": "u-delayed"},
+          },
+        ),
       ]);
 
       await plugin.sendPrompt(
@@ -604,7 +689,11 @@ void main() {
             "thread": {"id": "t-early-complete"},
           },
         ),
-        const _Response(result: {"turnId": "u-early-complete"}),
+        const _Response(
+          result: {
+            "turn": {"id": "u-early-complete"},
+          },
+        ),
       ]);
       fake.onRequest = (method) {
         if (method == "turn/start") {
@@ -619,7 +708,7 @@ void main() {
         agent: null,
         model: null,
       );
-      await Future<void>.delayed(Duration.zero);
+      await plugin.workState.firstWhere((state) => state == PluginWorkState.idle).timeout(const Duration(seconds: 1));
 
       expect(plugin.currentWorkState, PluginWorkState.idle);
     });
@@ -651,7 +740,14 @@ void main() {
       await turnStarted.future;
       await plugin.deleteSession("t-deleted");
 
-      fake.respondToHeld("turn/start", const _Response(result: {"turnId": "u-deleted"}));
+      fake.respondToHeld(
+        "turn/start",
+        const _Response(
+          result: {
+            "turn": {"id": "u-deleted"},
+          },
+        ),
+      );
       await send;
       expect(plugin.currentWorkState, PluginWorkState.idle);
 
@@ -661,7 +757,11 @@ void main() {
             "thread": {"id": "t-deleted"},
           },
         ),
-        const _Response(result: {"turnId": "u-recreated"}),
+        const _Response(
+          result: {
+            "turn": {"id": "u-recreated"},
+          },
+        ),
       ]);
       await plugin.createSession(
         directory: "/work/sample",
@@ -697,45 +797,39 @@ void main() {
       expect(fake.serverResponseFor(99)["result"], {"decision": "decline"});
     });
 
-    for (final terminalNotification in ["error", "thread/status/changed"]) {
-      test("$terminalNotification clears provisional busy", () async {
-        fake.respondInOrder([
-          const _Response(result: _initOk),
-          const _Response(
-            result: {
-              "thread": {"id": "t-terminal"},
-            },
-          ),
-          const _Response(result: {"turnId": "u-terminal"}),
-        ]);
+    test("error clears provisional busy", () async {
+      fake.respondInOrder([
+        const _Response(result: _initOk),
+        const _Response(
+          result: {
+            "thread": {"id": "t-terminal"},
+          },
+        ),
+        const _Response(
+          result: {
+            "turn": {"id": "u-terminal"},
+          },
+        ),
+      ]);
 
-        await plugin.sendPrompt(
-          sessionId: "t-terminal",
-          parts: const [PluginPromptPart.text(text: "go on")],
-          variant: null,
-          agent: null,
-          model: null,
-        );
-        expect(plugin.currentWorkState, PluginWorkState.busy);
+      await plugin.sendPrompt(
+        sessionId: "t-terminal",
+        parts: const [PluginPromptPart.text(text: "go on")],
+        variant: null,
+        agent: null,
+        model: null,
+      );
+      expect(plugin.currentWorkState, PluginWorkState.busy);
 
-        final idle = plugin.workState.firstWhere((state) => state == PluginWorkState.idle);
-        fake.pushNotification(
-          terminalNotification,
-          terminalNotification == "error"
-              ? {
-                  "threadId": "t-terminal",
-                  "error": {"message": "turn failed"},
-                }
-              : {
-                  "threadId": "t-terminal",
-                  "status": {"type": "idle"},
-                },
-        );
-
-        await idle.timeout(const Duration(seconds: 1));
-        expect(plugin.currentWorkState, PluginWorkState.idle);
+      final idle = plugin.workState.firstWhere((state) => state == PluginWorkState.idle);
+      fake.pushNotification("error", {
+        "threadId": "t-terminal",
+        "error": {"message": "turn failed"},
       });
-    }
+
+      await idle.timeout(const Duration(seconds: 1));
+      expect(plugin.currentWorkState, PluginWorkState.idle);
+    });
 
     test("sendPrompt does not re-resume a thread created in this run", () async {
       // createSession (no parts) loads the thread; a follow-up turn must reuse
@@ -747,7 +841,11 @@ void main() {
             "thread": {"id": "t-fresh"},
           },
         ),
-        const _Response(result: {"turnId": "u-1"}),
+        const _Response(
+          result: {
+            "turn": {"id": "u-1"},
+          },
+        ),
       ]);
 
       await plugin.createSession(
@@ -789,7 +887,11 @@ void main() {
             "thread": {"id": "t-dropped"},
           },
         ),
-        const _Response(result: {"turnId": "u-2"}),
+        const _Response(
+          result: {
+            "turn": {"id": "u-2"},
+          },
+        ),
       ]);
 
       // createSession with no parts marks t-dropped as loaded.
@@ -827,7 +929,11 @@ void main() {
             "thread": {"id": "t-1"},
           },
         ),
-        const _Response(result: {"turnId": "u-active"}),
+        const _Response(
+          result: {
+            "turn": {"id": "u-active"},
+          },
+        ),
         const _Response(result: null),
       ]);
 
@@ -853,6 +959,225 @@ void main() {
       final params = fake.sentParamsFor("turn/interrupt");
       expect(params["threadId"], equals("t-1"));
       expect(params["turnId"], equals("u-active"));
+    });
+
+    test("forced interruption includes an accepted turn before turn/started arrives", () async {
+      fake.respondInOrder([
+        const _Response(result: _initOk),
+        const _Response(
+          result: {
+            "thread": {"id": "t-force", "cwd": "/work/sample"},
+          },
+        ),
+        const _Response(
+          result: {
+            "turn": {"id": "u-force"},
+          },
+        ),
+        const _Response(result: null),
+      ]);
+      await plugin.sendPrompt(
+        sessionId: "t-force",
+        parts: const [PluginPromptPart.text(text: "long task")],
+        variant: null,
+        agent: null,
+        model: null,
+      );
+      var interruptionCompleted = false;
+
+      final interruption = plugin
+          .interruptActiveWork(budget: const Duration(seconds: 2))
+          .whenComplete(() => interruptionCompleted = true);
+      for (var attempt = 0; attempt < 100 && !fake.sentMethods.contains("turn/interrupt"); attempt++) {
+        await Future<void>.delayed(Duration.zero);
+      }
+      expect(fake.sentMethods, contains("turn/interrupt"));
+      expect(interruptionCompleted, isFalse);
+
+      fake.pushNotification("turn/completed", {
+        "threadId": "t-force",
+        "turn": {"id": "u-force"},
+      });
+
+      expect(await interruption, {"t-force"});
+      expect(plugin.currentWorkState, PluginWorkState.idle);
+    });
+
+    test("delayed prior terminal notifications preserve a newer accepted turn", () async {
+      fake.respondInOrder([
+        const _Response(result: _initOk),
+        const _Response(
+          result: {
+            "thread": {"id": "t-overlap", "cwd": "/work/sample"},
+          },
+        ),
+        const _Response(
+          result: {
+            "turn": {"id": "u-prior"},
+          },
+        ),
+      ]);
+      await plugin.sendPrompt(
+        sessionId: "t-overlap",
+        parts: const [PluginPromptPart.text(text: "first task")],
+        variant: null,
+        agent: null,
+        model: null,
+      );
+      final firstIdle = plugin.workState.firstWhere((state) => state == PluginWorkState.idle);
+      fake.pushNotification("turn/completed", {
+        "threadId": "t-overlap",
+        "turn": {"id": "u-prior"},
+      });
+      await firstIdle.timeout(const Duration(seconds: 1));
+
+      fake.respondInOrder([
+        const _Response(
+          result: {
+            "turn": {"id": "u-current"},
+          },
+        ),
+        const _Response(result: null),
+      ]);
+      await plugin.sendPrompt(
+        sessionId: "t-overlap",
+        parts: const [PluginPromptPart.text(text: "second task")],
+        variant: null,
+        agent: null,
+        model: null,
+      );
+      expect(plugin.currentWorkState, PluginWorkState.busy);
+
+      fake.pushNotification("turn/completed", {
+        "threadId": "t-overlap",
+        "turn": {"id": "u-prior"},
+      });
+      fake.pushNotification("thread/status/changed", {
+        "threadId": "t-overlap",
+        "status": {"type": "idle"},
+      });
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+
+      expect(plugin.currentWorkState, PluginWorkState.busy);
+      final interruption = plugin.interruptActiveWork(budget: const Duration(seconds: 2));
+      for (var attempt = 0; attempt < 100 && !fake.sentMethods.contains("turn/interrupt"); attempt++) {
+        await Future<void>.delayed(Duration.zero);
+      }
+      expect(fake.sentParamsFor("turn/interrupt"), {
+        "threadId": "t-overlap",
+        "turnId": "u-current",
+      });
+
+      fake.pushNotification("turn/completed", {
+        "threadId": "t-overlap",
+        "turn": {"id": "u-current"},
+      });
+      expect(await interruption, {"t-overlap"});
+    });
+
+    test("turn/start rejects a whitespace-only nested turn id", () async {
+      fake.respondInOrder([
+        const _Response(result: _initOk),
+        const _Response(
+          result: {
+            "thread": {"id": "t-whitespace"},
+          },
+        ),
+        const _Response(
+          result: {
+            "turn": {"id": "   "},
+          },
+        ),
+      ]);
+
+      await expectLater(
+        plugin.sendPrompt(
+          sessionId: "t-whitespace",
+          parts: const [PluginPromptPart.text(text: "continue")],
+          variant: null,
+          agent: null,
+          model: null,
+        ),
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.message,
+            "message",
+            "turn/start response missing turn.id",
+          ),
+        ),
+      );
+    });
+
+    test("error waits for terminal rollout history before reporting idle", () async {
+      const sessionId = "019a0000-1111-2222-3333-bbbbbbbbbbbb";
+      final rollout = File(
+        p.join(
+          codexHome.path,
+          "sessions/2026/07/23/"
+          "rollout-2026-07-23T08-00-00-$sessionId.jsonl",
+        ),
+      )..createSync(recursive: true);
+      rollout.writeAsStringSync(
+        "${jsonEncode({
+          "timestamp": "2026-07-23T08:00:00Z",
+          "type": "session_meta",
+          "payload": {
+            "id": sessionId,
+            "timestamp": "2026-07-23T08:00:00Z",
+            "cwd": "/work/sample",
+            "model_provider": "openai",
+            "cli_version": "0.144.1",
+          },
+        })}\n",
+      );
+      fake.respondInOrder([
+        const _Response(result: _initOk),
+        const _Response(
+          result: {
+            "thread": {"id": sessionId},
+          },
+        ),
+        const _Response(
+          result: {
+            "turn": {"id": "u-error"},
+          },
+        ),
+      ]);
+      final events = <BridgeSseEvent>[];
+      final subscription = plugin.events.listen(events.add);
+      addTearDown(subscription.cancel);
+      await plugin.sendPrompt(
+        sessionId: sessionId,
+        parts: const [PluginPromptPart.text(text: "run a tool")],
+        variant: null,
+        agent: null,
+        model: null,
+      );
+      final record = jsonEncode(
+        _toolCall(
+          id: "fc-error",
+          callId: "call-error",
+          name: "exec_command",
+          arguments: '{"cmd":"sleep 1"}',
+        ),
+      );
+      final split = record.length ~/ 2;
+      rollout.writeAsStringSync(record.substring(0, split), mode: FileMode.append);
+
+      final idle = plugin.workState.firstWhere((state) => state == PluginWorkState.idle);
+      fake.pushNotification("error", {
+        "threadId": sessionId,
+        "error": {"message": "turn failed"},
+      });
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      expect(plugin.currentWorkState, PluginWorkState.busy);
+
+      rollout.writeAsStringSync("${record.substring(split)}\n", mode: FileMode.append);
+      await idle.timeout(const Duration(seconds: 1));
+      expect(
+        events.whereType<BridgeSseMessagePartUpdated>().map((event) => event.part.messageID),
+        contains("call-error"),
+      );
     });
 
     test("notification stream is mapped into bridge events", () async {
@@ -958,7 +1283,11 @@ void main() {
             "thread": {"id": sessionId},
           },
         ),
-        const _Response(result: {"turnId": "u-live"}),
+        const _Response(
+          result: {
+            "turn": {"id": "u-live"},
+          },
+        ),
       ]);
       final events = <BridgeSseEvent>[];
       final subscription = plugin.events.listen(events.add);
@@ -1311,7 +1640,11 @@ void main() {
             "thread": {"id": "t-effort"},
           },
         ),
-        const _Response(result: {"turnId": "u-1"}),
+        const _Response(
+          result: {
+            "turn": {"id": "u-1"},
+          },
+        ),
       ]);
 
       await plugin.sendPrompt(
@@ -1342,7 +1675,11 @@ void main() {
             "thread": {"id": "t-default"},
           },
         ),
-        const _Response(result: {"turnId": "u-1"}),
+        const _Response(
+          result: {
+            "turn": {"id": "u-1"},
+          },
+        ),
       ]);
 
       await plugin.sendPrompt(
@@ -1365,7 +1702,11 @@ void main() {
             "thread": {"id": "t-new"},
           },
         ),
-        const _Response(result: {"turnId": "u-1"}),
+        const _Response(
+          result: {
+            "turn": {"id": "u-1"},
+          },
+        ),
       ]);
 
       await plugin.createSession(
