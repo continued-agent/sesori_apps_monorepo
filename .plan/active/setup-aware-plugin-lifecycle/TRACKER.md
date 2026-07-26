@@ -4,10 +4,10 @@
 
 - **Status:** Stages 10-12 are merged; Stage 13 remains
 - **Base:** `origin/main` at Stage 12 merge `6cedf5bd`
-- **Current branch:** Stage 13 rebuild branch TBD
-- **Current stage:** Stage 13 — redesigned mobile plugin settings
-- **Next action:** reassess drift from frozen PR #511 and define the Stage 13
-  replacement delivery
+- **Current branch:** `plan/stage-13-pr-sizing` plan update
+- **Current stage:** Stage 13 — redesigned mobile Harnesses settings
+- **Next action:** implement Step 1/7 from
+  `.plan/active/setup-aware-harness-settings` after this plan PR merges
 
 ## Frozen Oversized Stack
 
@@ -38,7 +38,7 @@ run their focused verification again.
 | [x] | Stage 11-P01D — bridge-owned projects and defaults | `setup-aware-plugin-lifecycle-project-ownership` | #550 merged as `5020c003` |
 | [x] | Stage 11-P02 — dormancy and numeric idle timeout | `setup-aware-plugin-lifecycle-dormant-runtime` | #556 merged as `41e03f12` |
 | [x] | Stage 12 — headless management | six-PR child series | #563, #567-#570, and #572 merged; recorded in `.plan/completed/setup-aware-plugin-management` |
-| [ ] | Stage 13 — redesigned mobile plugin settings | rebuild branch TBD | frozen #511 descendant |
+| [ ] | Stage 13 — redesigned mobile Harnesses settings | seven-PR `setup-aware-harness-settings` child series | child plan defines exact branches/titles, file boundaries, estimates, and E2E gates |
 
 ## Locked Redesign Deltas
 
@@ -56,6 +56,16 @@ run their focused verification again.
   persisted timeout settings; OpenCode `--opencode-no-auto-start` uses it.
 - Headless management removes authority/order/serialized enabled.
 - Settings work targets the merged Prego Settings landing/sub-page architecture.
+- The user-facing settings destination is Harnesses. Internal domain names stay
+  plugins; routes, screens, localization, and copy use Harnesses.
+- The Harnesses settings row sits immediately below Notifications with the same
+  grouped-row style. Its overview page follows the Notifications page visually
+  and shows descriptor-declared harness logos through a backend-neutral Prego
+  resolver.
+- Remaining delivery aims for approximately 1,000 changed lines per PR. This is
+  a reviewability target rather than a hard limit; simple generated or
+  mechanical excess requires an explicit rationale, while complex work splits
+  earlier when useful.
 - No compatibility machinery is retained for any contract from the superseded
   oversized stack.
 - Aggregate projects are bridge-owned and may include sessions from multiple
@@ -313,3 +323,19 @@ run their focused verification again.
 - Frozen PR #510 was closed as superseded. The completed child plan and its
   detailed verification record moved to
   `.plan/completed/setup-aware-plugin-management`.
+
+### 2026-07-26 — Stage 13 concrete Harnesses series
+
+- Replaced the placeholder Stage 13 rebuild note with the concrete seven-PR
+  `setup-aware-harness-settings` child plan.
+- Locked the user-facing Harnesses label while retaining internal plugin domain
+  names. The settings entry goes directly below Notifications, and the overview
+  page mirrors the Notifications page's grouped-row Prego structure.
+- Added descriptor-declared opaque `brandLogoKey` transport and a Prego logo
+  resolver that uses the existing OpenCode, Codex, and Cursor VESPR glyphs with
+  a generic fallback.
+- Recorded per-slice estimates from 300-1,300 changed lines, including
+  generated and mechanical output.
+- Required real simulator E2E with the source bridge running
+  `--data-dir ~/.local/share/sesori-dev`, the existing login, and the
+  `random stuff` project; the temporary E2E bridge must be stopped afterward.
