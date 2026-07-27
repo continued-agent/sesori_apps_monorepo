@@ -538,6 +538,7 @@ void main() {
         const [],
         const [PluginLifecycleConflictReason.transitioning],
         const [PluginLifecycleConflictReason.notEnabled],
+        const [PluginLifecycleConflictReason.unsupported],
         const [PluginLifecycleConflictReason.unknown],
         const [PluginLifecycleConflictReason.busy, PluginLifecycleConflictReason.unknown],
       ]) {
@@ -616,6 +617,11 @@ PluginLifecycleConflict _conflict(List<PluginLifecycleConflictReason> reasons) {
       workState: PluginManagementWorkState.idle,
       idleTimeoutMins: 10,
       hasIdleTimeoutOverride: false,
+      managementCapabilities: {
+        PluginManagementCapability.lifecycle,
+        PluginManagementCapability.setupRefresh,
+        PluginManagementCapability.idleTimeout,
+      },
       actionHint: null,
     ),
   );

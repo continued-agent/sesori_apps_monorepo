@@ -42,9 +42,11 @@ enum PluginRuntimeState {
 
 enum PluginManagementWorkState { idle, busy, unknown }
 
+enum PluginManagementCapability { lifecycle, setupRefresh, idleTimeout, unknown }
+
 enum PluginStopMode { safe, force }
 
-enum PluginLifecycleConflictReason { inFlight, busy, workStateUnknown, transitioning, notEnabled, unknown }
+enum PluginLifecycleConflictReason { inFlight, busy, workStateUnknown, transitioning, notEnabled, unsupported, unknown }
 
 @Freezed(fromJson: true, toJson: true)
 sealed class PluginManagementMetadata with _$PluginManagementMetadata {
@@ -54,6 +56,8 @@ sealed class PluginManagementMetadata with _$PluginManagementMetadata {
     @JsonKey(unknownEnumValue: PluginManagementWorkState.unknown) required PluginManagementWorkState workState,
     required int idleTimeoutMins,
     required bool hasIdleTimeoutOverride,
+    @JsonKey(unknownEnumValue: PluginManagementCapability.unknown)
+    required Set<PluginManagementCapability> managementCapabilities,
     required String? actionHint,
   }) = _PluginManagementMetadata;
 

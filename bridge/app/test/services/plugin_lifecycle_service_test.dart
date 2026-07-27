@@ -21,9 +21,24 @@ void main() {
     final service = _service(
       runtime: runtime,
       plugins: const [
-        (id: "zeta", displayName: "Zeta", residencyPolicy: PluginResidencyPolicy.transient),
-        (id: "beta", displayName: "Beta", residencyPolicy: PluginResidencyPolicy.transient),
-        (id: "alpha", displayName: "Alpha", residencyPolicy: PluginResidencyPolicy.transient),
+        (
+          id: "zeta",
+          displayName: "Zeta",
+          residencyPolicy: PluginResidencyPolicy.transient,
+          managementCapabilities: defaultManagementCapabilities,
+        ),
+        (
+          id: "beta",
+          displayName: "Beta",
+          residencyPolicy: PluginResidencyPolicy.transient,
+          managementCapabilities: defaultManagementCapabilities,
+        ),
+        (
+          id: "alpha",
+          displayName: "Alpha",
+          residencyPolicy: PluginResidencyPolicy.transient,
+          managementCapabilities: defaultManagementCapabilities,
+        ),
       ],
     );
     addTearDown(service.dispose);
@@ -53,8 +68,18 @@ void main() {
     final service = _service(
       runtime: runtime,
       plugins: const [
-        (id: "alpha", displayName: "Alpha", residencyPolicy: PluginResidencyPolicy.transient),
-        (id: "opencode", displayName: "OpenCode", residencyPolicy: PluginResidencyPolicy.transient),
+        (
+          id: "alpha",
+          displayName: "Alpha",
+          residencyPolicy: PluginResidencyPolicy.transient,
+          managementCapabilities: defaultManagementCapabilities,
+        ),
+        (
+          id: "opencode",
+          displayName: "OpenCode",
+          residencyPolicy: PluginResidencyPolicy.transient,
+          managementCapabilities: defaultManagementCapabilities,
+        ),
       ],
     );
     addTearDown(service.dispose);
@@ -82,8 +107,18 @@ void main() {
     final service = _service(
       runtime: runtime,
       plugins: const [
-        (id: "opencode", displayName: "OpenCode", residencyPolicy: PluginResidencyPolicy.transient),
-        (id: "alpha", displayName: "Alpha", residencyPolicy: PluginResidencyPolicy.transient),
+        (
+          id: "opencode",
+          displayName: "OpenCode",
+          residencyPolicy: PluginResidencyPolicy.transient,
+          managementCapabilities: defaultManagementCapabilities,
+        ),
+        (
+          id: "alpha",
+          displayName: "Alpha",
+          residencyPolicy: PluginResidencyPolicy.transient,
+          managementCapabilities: defaultManagementCapabilities,
+        ),
       ],
     );
     addTearDown(service.dispose);
@@ -105,8 +140,18 @@ void main() {
     final service = _service(
       runtime: runtime,
       plugins: const [
-        (id: "opencode", displayName: "OpenCode", residencyPolicy: PluginResidencyPolicy.transient),
-        (id: "cursor", displayName: "Cursor", residencyPolicy: PluginResidencyPolicy.transient),
+        (
+          id: "opencode",
+          displayName: "OpenCode",
+          residencyPolicy: PluginResidencyPolicy.transient,
+          managementCapabilities: defaultManagementCapabilities,
+        ),
+        (
+          id: "cursor",
+          displayName: "Cursor",
+          residencyPolicy: PluginResidencyPolicy.transient,
+          managementCapabilities: defaultManagementCapabilities,
+        ),
       ],
     );
     addTearDown(service.dispose);
@@ -161,9 +206,24 @@ void main() {
           )
           ..registerPlugins(
             plugins: const [
-              (id: "opencode", displayName: "OpenCode", residencyPolicy: PluginResidencyPolicy.resident),
-              (id: "alpha", displayName: "Alpha", residencyPolicy: PluginResidencyPolicy.transient),
-              (id: "beta", displayName: "Beta", residencyPolicy: PluginResidencyPolicy.transient),
+              (
+                id: "opencode",
+                displayName: "OpenCode",
+                residencyPolicy: PluginResidencyPolicy.resident,
+                managementCapabilities: defaultManagementCapabilities,
+              ),
+              (
+                id: "alpha",
+                displayName: "Alpha",
+                residencyPolicy: PluginResidencyPolicy.transient,
+                managementCapabilities: defaultManagementCapabilities,
+              ),
+              (
+                id: "beta",
+                displayName: "Beta",
+                residencyPolicy: PluginResidencyPolicy.transient,
+                managementCapabilities: defaultManagementCapabilities,
+              ),
             ],
           )
           ..initialize(
@@ -215,13 +275,118 @@ void main() {
     expect(runtime.activePluginIds, isEmpty);
   });
 
+  test("management snapshot publishes each plugin's declared capabilities", () {
+    final repository = _CommandLifecycleRepository(
+      inspectionResult: const PluginSetupReady(),
+      inspectionGate: null,
+      startFailureMessage: null,
+    );
+    final service =
+        _commandService(
+          repository: repository,
+          settingsRepository: null,
+          managementCapabilities: const {PluginControlCapability.setupRefresh},
+        )..initialize(
+          disabledPluginIds: const {},
+          setupById: const {"one": PluginSetupReady()},
+        );
+    addTearDown(() async {
+      await service.dispose();
+      await repository.dispose();
+    });
+
+    expect(
+      service.managementSnapshot.plugins.single.managementCapabilities,
+      const {PluginManagementCapability.setupRefresh},
+    );
+  });
+
+  test("management snapshot uses the immutable capability registration snapshot", () {
+    final repository = _CommandLifecycleRepository(
+      inspectionResult: const PluginSetupReady(),
+      inspectionGate: null,
+      startFailureMessage: null,
+    );
+    final capabilities = <PluginControlCapability>{PluginControlCapability.setupRefresh};
+    final service = _commandService(
+      repository: repository,
+      settingsRepository: null,
+      managementCapabilities: capabilities,
+    );
+    capabilities
+      ..clear()
+      ..add(PluginControlCapability.lifecycle);
+    service.initialize(
+      disabledPluginIds: const {},
+      setupById: const {"one": PluginSetupReady()},
+    );
+    addTearDown(() async {
+      await service.dispose();
+      await repository.dispose();
+    });
+
+    expect(
+      service.managementSnapshot.plugins.single.managementCapabilities,
+      const {PluginManagementCapability.setupRefresh},
+    );
+  });
+
+  test("reports disabled plugins that cannot be lifecycle-managed", () {
+    final runtime = createRegisteredTestPluginRuntime(pluginIds: const ["external", "managed"]);
+    addTearDown(runtime.dispose);
+    final settingsRepository = _MutableBridgeSettingsRepository(
+      settings: const BridgeSettings(
+        plugins: BridgePluginSettings(disabledPluginIds: {"external", "managed", "future-plugin"}),
+      ),
+    );
+    final service =
+        PluginLifecycleService(
+          lifecycleRepository: PluginLifecycleRepository(runtime: runtime),
+          preferredDefaultPluginId: legacyMissingPluginId,
+          bridgeSettingsRepository: settingsRepository,
+          idleTimerScheduler: const PluginIdleTimerScheduler(),
+          bridgeIdProvider: FakeBridgeIdProvider("br_test1234"),
+        )..registerPlugins(
+          plugins: const [
+            (
+              id: "external",
+              displayName: "External",
+              residencyPolicy: PluginResidencyPolicy.resident,
+              managementCapabilities: {PluginControlCapability.setupRefresh},
+            ),
+            (
+              id: "managed",
+              displayName: "Managed",
+              residencyPolicy: PluginResidencyPolicy.transient,
+              managementCapabilities: defaultManagementCapabilities,
+            ),
+          ],
+        );
+    addTearDown(service.dispose);
+
+    final disabledPluginIds = service.uncontrollableDisabledPluginIds(
+      disabledPluginIds: settingsRepository.currentSettings.plugins.disabledPluginIds,
+    );
+
+    expect(disabledPluginIds, const {"external"});
+    expect(
+      settingsRepository.currentSettings.plugins.disabledPluginIds,
+      const {"external", "managed", "future-plugin"},
+    );
+  });
+
   test("management snapshot tokens publish only externally visible changes", () async {
     final runtime = createRegisteredTestPluginRuntime(pluginIds: const ["alpha"]);
     final service =
         _service(
           runtime: runtime,
           plugins: const [
-            (id: "alpha", displayName: "Alpha", residencyPolicy: PluginResidencyPolicy.transient),
+            (
+              id: "alpha",
+              displayName: "Alpha",
+              residencyPolicy: PluginResidencyPolicy.transient,
+              managementCapabilities: defaultManagementCapabilities,
+            ),
           ],
         )..initialize(
           disabledPluginIds: const {},
@@ -277,8 +442,18 @@ void main() {
         _service(
           runtime: runtime,
           plugins: const [
-            (id: "alpha", displayName: "Alpha", residencyPolicy: PluginResidencyPolicy.transient),
-            (id: "beta", displayName: "Beta", residencyPolicy: PluginResidencyPolicy.transient),
+            (
+              id: "alpha",
+              displayName: "Alpha",
+              residencyPolicy: PluginResidencyPolicy.transient,
+              managementCapabilities: defaultManagementCapabilities,
+            ),
+            (
+              id: "beta",
+              displayName: "Beta",
+              residencyPolicy: PluginResidencyPolicy.transient,
+              managementCapabilities: defaultManagementCapabilities,
+            ),
           ],
         )..initialize(
           disabledPluginIds: const {},
@@ -316,6 +491,119 @@ void main() {
     expect(snapshotTokens, hasLength(3));
     expect(service.managementSnapshot.snapshotToken, snapshotTokens.last);
     expect({initialToken, ...snapshotTokens}, hasLength(4));
+  });
+
+  test("unsupported per-plugin timeout updates fail before settings or runtime effects", () async {
+    final repository = _IdleLifecycleRepository();
+    final settingsRepository = _MutableBridgeSettingsRepository(
+      settings: const BridgeSettings(
+        plugins: BridgePluginSettings(
+          settingsByPluginId: {
+            "one": PluginLifecycleSettings(idleTimeoutMins: 15),
+          },
+        ),
+      ),
+    );
+    final timerScheduler = _ControllablePluginIdleTimerScheduler();
+    final service = _singleIdleService(
+      lifecycleRepository: repository,
+      settingsRepository: settingsRepository,
+      timerScheduler: timerScheduler,
+      residencyPolicy: PluginResidencyPolicy.transient,
+      managementCapabilities: const {PluginControlCapability.setupRefresh},
+    );
+    addTearDown(() async {
+      await service.dispose();
+      await repository.dispose();
+    });
+    final unsupportedConflict = isA<PluginManagementConflictException>()
+        .having((error) => error.conflict.pluginId, "pluginId", "one")
+        .having(
+          (error) => error.conflict.reasons,
+          "reasons",
+          const [PluginLifecycleConflictReason.unsupported],
+        );
+
+    for (final request in const <PluginIdleTimeoutUpdateRequest>[
+      PluginIdleTimeoutUpdateRequest.setOverride(pluginId: "one", idleTimeoutMins: 45),
+      PluginIdleTimeoutUpdateRequest.clearOverride(pluginId: "one"),
+    ]) {
+      await expectLater(
+        Future<PluginManagementResponse>.sync(
+          () => service.updateIdleTimeout(request: request),
+        ),
+        throwsA(unsupportedConflict),
+      );
+    }
+
+    expect(settingsRepository.loadCalls, isZero);
+    expect(settingsRepository.settings.plugins.settingsByPluginId["one"]?.idleTimeoutMins, 15);
+    expect(timerScheduler.timers, isEmpty);
+    expect(repository.stopCalls, isZero);
+  });
+
+  test("apply-all updates the default and clears only timeout-capable overrides", () async {
+    final runtime = createRegisteredTestPluginRuntime(pluginIds: const ["managed", "external"]);
+    final settingsRepository = _MutableBridgeSettingsRepository(
+      settings: const BridgeSettings(
+        plugins: BridgePluginSettings(
+          defaults: PluginLifecycleSettings(idleTimeoutMins: 10),
+          settingsByPluginId: {
+            "managed": PluginLifecycleSettings(idleTimeoutMins: 20),
+            "external": PluginLifecycleSettings(idleTimeoutMins: 25),
+          },
+        ),
+      ),
+    );
+    final service =
+        PluginLifecycleService(
+            lifecycleRepository: PluginLifecycleRepository(runtime: runtime),
+            preferredDefaultPluginId: legacyMissingPluginId,
+            bridgeSettingsRepository: settingsRepository,
+            idleTimerScheduler: const PluginIdleTimerScheduler(),
+            bridgeIdProvider: FakeBridgeIdProvider("br_test1234"),
+          )
+          ..registerPlugins(
+            plugins: const [
+              (
+                id: "managed",
+                displayName: "Managed",
+                residencyPolicy: PluginResidencyPolicy.transient,
+                managementCapabilities: {PluginControlCapability.idleTimeout},
+              ),
+              (
+                id: "external",
+                displayName: "External",
+                residencyPolicy: PluginResidencyPolicy.transient,
+                managementCapabilities: {PluginControlCapability.setupRefresh},
+              ),
+            ],
+          )
+          ..initialize(
+            disabledPluginIds: const {},
+            setupById: const {
+              "managed": PluginSetupReady(),
+              "external": PluginSetupReady(),
+            },
+          );
+    addTearDown(() async {
+      await service.dispose();
+      await runtime.dispose();
+    });
+
+    final response = await service.updateIdleTimeout(
+      request: const PluginIdleTimeoutUpdateRequest.applyAll(idleTimeoutMins: 30),
+    );
+    final responseById = {for (final plugin in response.plugins) plugin.setup.id: plugin};
+
+    expect(response.defaultIdleTimeoutMins, 30);
+    expect(settingsRepository.settings.plugins.defaults.idleTimeoutMins, 30);
+    expect(settingsRepository.settings.plugins.settingsByPluginId, isNot(contains("managed")));
+    expect(settingsRepository.settings.plugins.settingsByPluginId["external"]?.idleTimeoutMins, 25);
+    expect(responseById["managed"]?.idleTimeoutMins, 30);
+    expect(responseById["managed"]?.hasIdleTimeoutOverride, isFalse);
+    expect(responseById["external"]?.idleTimeoutMins, 25);
+    expect(responseById["external"]?.hasIdleTimeoutOverride, isTrue);
   });
 
   test("idle timeout writes serialize and preserve unknown plugin settings", () async {
@@ -397,7 +685,12 @@ void main() {
           )
           ..registerPlugins(
             plugins: const [
-              (id: "one", displayName: "One", residencyPolicy: PluginResidencyPolicy.transient),
+              (
+                id: "one",
+                displayName: "One",
+                residencyPolicy: PluginResidencyPolicy.transient,
+                managementCapabilities: defaultManagementCapabilities,
+              ),
             ],
           )
           ..initialize(
@@ -526,6 +819,110 @@ void main() {
     expect(timerScheduler.timers, isEmpty);
   });
 
+  test("idle suspension requires lifecycle and idle-timeout capabilities", () async {
+    final repository = _IdleLifecycleRepository();
+    final settingsRepository = _MutableBridgeSettingsRepository(settings: const BridgeSettings());
+    final timerScheduler = _ControllablePluginIdleTimerScheduler();
+    final service = _singleIdleService(
+      lifecycleRepository: repository,
+      settingsRepository: settingsRepository,
+      timerScheduler: timerScheduler,
+      residencyPolicy: PluginResidencyPolicy.transient,
+      managementCapabilities: const {PluginControlCapability.setupRefresh},
+    );
+    addTearDown(() async {
+      await service.dispose();
+      await repository.dispose();
+    });
+
+    repository.publish(workState: PluginWorkState.idle, leaseCount: 0);
+
+    expect(timerScheduler.timers, isEmpty);
+    expect(repository.stopCalls, isZero);
+  });
+
+  test("unsupported lifecycle commands fail before runtime or settings effects", () async {
+    final repository = _CommandLifecycleRepository(
+      inspectionResult: const PluginSetupReady(),
+      inspectionGate: null,
+      startFailureMessage: null,
+    );
+    final settingsRepository = _MutableBridgeSettingsRepository(settings: const BridgeSettings());
+    final service =
+        _commandService(
+          repository: repository,
+          settingsRepository: settingsRepository,
+          managementCapabilities: const {PluginControlCapability.setupRefresh},
+        )..initialize(
+          disabledPluginIds: const {},
+          setupById: const {"one": PluginSetupReady()},
+        );
+    addTearDown(() async {
+      await service.dispose();
+      await repository.dispose();
+    });
+    final unsupportedConflict = isA<PluginManagementConflictException>().having(
+      (error) => error.conflict.reasons,
+      "reasons",
+      const [PluginLifecycleConflictReason.unsupported],
+    );
+
+    for (final request in const <PluginLifecycleCommandRequest>[
+      PluginLifecycleCommandRequest.enable(),
+      PluginLifecycleCommandRequest.disable(mode: PluginStopMode.safe),
+      PluginLifecycleCommandRequest.restart(mode: PluginStopMode.force),
+    ]) {
+      await expectLater(
+        Future<PluginManagementResponse>.sync(
+          () => service.command(pluginId: "one", request: request),
+        ),
+        throwsA(unsupportedConflict),
+      );
+    }
+
+    expect(repository.inspectCalls, isZero);
+    expect(repository.startCalls, isZero);
+    expect(repository.restartCalls, isZero);
+    expect(repository.prepareDisableCalls, isZero);
+    expect(repository.snapshot.single.state, PluginRuntimeState.dormant);
+    expect(settingsRepository.loadCalls, isZero);
+    expect(settingsRepository.settings, const BridgeSettings());
+  });
+
+  test("setup refresh remains allowed without lifecycle capability", () async {
+    final repository = _CommandLifecycleRepository(
+      inspectionResult: const PluginSetupReady(),
+      inspectionGate: null,
+      startFailureMessage: null,
+    );
+    final settingsRepository = _MutableBridgeSettingsRepository(settings: const BridgeSettings());
+    final service =
+        _commandService(
+          repository: repository,
+          settingsRepository: settingsRepository,
+          managementCapabilities: const {PluginControlCapability.setupRefresh},
+        )..initialize(
+          disabledPluginIds: const {},
+          setupById: const {"one": PluginSetupRuntimeMissing(actionHint: "Install")},
+        );
+    addTearDown(() async {
+      await service.dispose();
+      await repository.dispose();
+    });
+
+    final response = await service.command(
+      pluginId: "one",
+      request: const PluginLifecycleCommandRequest.refresh(),
+    );
+
+    expect(repository.inspectCalls, 1);
+    expect(repository.startCalls, isZero);
+    expect(repository.restartCalls, isZero);
+    expect(repository.prepareDisableCalls, isZero);
+    expect(settingsRepository.loadCalls, isZero);
+    expect(response.plugins.single.setup.state, PluginSetupState.ready);
+  });
+
   test("disable commits durable eligibility and equal commands join", () async {
     final runtime = createRegisteredTestPluginRuntime(pluginIds: const ["one"]);
     final settingsRepository = _MutableBridgeSettingsRepository(settings: const BridgeSettings())
@@ -540,7 +937,12 @@ void main() {
           )
           ..registerPlugins(
             plugins: const [
-              (id: "one", displayName: "One", residencyPolicy: PluginResidencyPolicy.transient),
+              (
+                id: "one",
+                displayName: "One",
+                residencyPolicy: PluginResidencyPolicy.transient,
+                managementCapabilities: defaultManagementCapabilities,
+              ),
             ],
           )
           ..initialize(
@@ -588,7 +990,12 @@ void main() {
           )
           ..registerPlugins(
             plugins: const [
-              (id: "one", displayName: "One", residencyPolicy: PluginResidencyPolicy.transient),
+              (
+                id: "one",
+                displayName: "One",
+                residencyPolicy: PluginResidencyPolicy.transient,
+                managementCapabilities: defaultManagementCapabilities,
+              ),
             ],
           )
           ..initialize(
@@ -638,7 +1045,12 @@ void main() {
           )
           ..registerPlugins(
             plugins: const [
-              (id: "one", displayName: "One", residencyPolicy: PluginResidencyPolicy.transient),
+              (
+                id: "one",
+                displayName: "One",
+                residencyPolicy: PluginResidencyPolicy.transient,
+                managementCapabilities: defaultManagementCapabilities,
+              ),
             ],
           )
           ..initialize(
@@ -675,7 +1087,12 @@ void main() {
           )
           ..registerPlugins(
             plugins: const [
-              (id: "one", displayName: "One", residencyPolicy: PluginResidencyPolicy.transient),
+              (
+                id: "one",
+                displayName: "One",
+                residencyPolicy: PluginResidencyPolicy.transient,
+                managementCapabilities: defaultManagementCapabilities,
+              ),
             ],
           )
           ..initialize(
@@ -964,8 +1381,18 @@ void main() {
     final service = _service(
       runtime: runtime,
       plugins: const [
-        (id: "beta", displayName: "Beta", residencyPolicy: PluginResidencyPolicy.transient),
-        (id: "alpha", displayName: "Alpha", residencyPolicy: PluginResidencyPolicy.transient),
+        (
+          id: "beta",
+          displayName: "Beta",
+          residencyPolicy: PluginResidencyPolicy.transient,
+          managementCapabilities: defaultManagementCapabilities,
+        ),
+        (
+          id: "alpha",
+          displayName: "Alpha",
+          residencyPolicy: PluginResidencyPolicy.transient,
+          managementCapabilities: defaultManagementCapabilities,
+        ),
       ],
     );
     addTearDown(service.dispose);
@@ -1003,7 +1430,12 @@ void main() {
     final service = _service(
       runtime: runtime,
       plugins: const [
-        (id: "alpha", displayName: "Alpha", residencyPolicy: PluginResidencyPolicy.transient),
+        (
+          id: "alpha",
+          displayName: "Alpha",
+          residencyPolicy: PluginResidencyPolicy.transient,
+          managementCapabilities: defaultManagementCapabilities,
+        ),
       ],
     );
     addTearDown(service.dispose);
@@ -1026,7 +1458,12 @@ void main() {
           bridgeIdProvider: FakeBridgeIdProvider("br_test1234"),
         )..registerPlugins(
           plugins: const [
-            (id: "one", displayName: "One", residencyPolicy: PluginResidencyPolicy.transient),
+            (
+              id: "one",
+              displayName: "One",
+              residencyPolicy: PluginResidencyPolicy.transient,
+              managementCapabilities: defaultManagementCapabilities,
+            ),
           ],
         );
     addTearDown(service.dispose);
@@ -1052,7 +1489,12 @@ void main() {
           bridgeIdProvider: FakeBridgeIdProvider("br_test1234"),
         )..registerPlugins(
           plugins: const [
-            (id: "one", displayName: "One", residencyPolicy: PluginResidencyPolicy.transient),
+            (
+              id: "one",
+              displayName: "One",
+              residencyPolicy: PluginResidencyPolicy.transient,
+              managementCapabilities: defaultManagementCapabilities,
+            ),
           ],
         );
     addTearDown(service.dispose);
@@ -1095,7 +1537,12 @@ void main() {
           bridgeIdProvider: FakeBridgeIdProvider("br_test1234"),
         )..registerPlugins(
           plugins: const [
-            (id: "one", displayName: "One", residencyPolicy: PluginResidencyPolicy.transient),
+            (
+              id: "one",
+              displayName: "One",
+              residencyPolicy: PluginResidencyPolicy.transient,
+              managementCapabilities: defaultManagementCapabilities,
+            ),
           ],
         );
     addTearDown(service.dispose);
@@ -1133,7 +1580,12 @@ void main() {
           bridgeIdProvider: FakeBridgeIdProvider("br_test1234"),
         )..registerPlugins(
           plugins: const [
-            (id: "one", displayName: "One", residencyPolicy: PluginResidencyPolicy.resident),
+            (
+              id: "one",
+              displayName: "One",
+              residencyPolicy: PluginResidencyPolicy.resident,
+              managementCapabilities: defaultManagementCapabilities,
+            ),
           ],
         );
     addTearDown(service.dispose);
@@ -1169,6 +1621,7 @@ PluginLifecycleService _singleIdleService({
   required BridgeSettingsRepository settingsRepository,
   required PluginIdleTimerScheduler timerScheduler,
   required PluginResidencyPolicy residencyPolicy,
+  Set<PluginControlCapability> managementCapabilities = defaultManagementCapabilities,
 }) {
   return PluginLifecycleService(
       lifecycleRepository: lifecycleRepository,
@@ -1178,7 +1631,14 @@ PluginLifecycleService _singleIdleService({
       bridgeIdProvider: FakeBridgeIdProvider("br_test1234"),
     )
     ..registerPlugins(
-      plugins: [(id: "one", displayName: "One", residencyPolicy: residencyPolicy)],
+      plugins: [
+        (
+          id: "one",
+          displayName: "One",
+          residencyPolicy: residencyPolicy,
+          managementCapabilities: managementCapabilities,
+        ),
+      ],
     )
     ..initialize(
       disabledPluginIds: const {},
@@ -1189,6 +1649,7 @@ PluginLifecycleService _singleIdleService({
 PluginLifecycleService _commandService({
   required PluginLifecycleRepository repository,
   required BridgeSettingsRepository? settingsRepository,
+  Set<PluginControlCapability> managementCapabilities = defaultManagementCapabilities,
 }) {
   return PluginLifecycleService(
     lifecycleRepository: repository,
@@ -1197,8 +1658,13 @@ PluginLifecycleService _commandService({
     idleTimerScheduler: const PluginIdleTimerScheduler(),
     bridgeIdProvider: FakeBridgeIdProvider("br_test1234"),
   )..registerPlugins(
-    plugins: const [
-      (id: "one", displayName: "One", residencyPolicy: PluginResidencyPolicy.transient),
+    plugins: [
+      (
+        id: "one",
+        displayName: "One",
+        residencyPolicy: PluginResidencyPolicy.transient,
+        managementCapabilities: managementCapabilities,
+      ),
     ],
   );
 }
@@ -1397,6 +1863,7 @@ class _CommandLifecycleRepository implements PluginLifecycleRepository {
   int inspectCalls = 0;
   int startCalls = 0;
   int restartCalls = 0;
+  int prepareDisableCalls = 0;
 
   @override
   List<PluginLifecycleSnapshot> get snapshot => [_current];
@@ -1474,6 +1941,7 @@ class _CommandLifecycleRepository implements PluginLifecycleRepository {
     required String pluginId,
     required PluginStopIntent intent,
   }) async {
+    prepareDisableCalls++;
     _current = _copySnapshot(
       setup: _current.setup,
       accessGate: PluginRuntimeAccessGate.draining,
