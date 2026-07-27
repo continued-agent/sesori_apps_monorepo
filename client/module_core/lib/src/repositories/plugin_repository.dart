@@ -1,14 +1,77 @@
+import "dart:async";
+
 import "package:injectable/injectable.dart";
 import "package:sesori_auth/sesori_auth.dart";
 import "package:sesori_shared/sesori_shared.dart";
 
 import "../api/plugin_api.dart";
+import "../capabilities/relay/relay_client.dart";
+import "models/plugin_management_result.dart";
 
 @lazySingleton
 class PluginRepository {
   final PluginApi _api;
 
   PluginRepository({required PluginApi api}) : _api = api;
+
+  Future<PluginManagementLoadResult> getManagement() async {
+    return switch (await _api.getManagement()) {
+      SuccessResponse(:final data) => PluginManagementLoadResult.supported(response: data, refreshError: null),
+      ErrorResponse(error: NonSuccessCodeError(errorCode: 404)) => const PluginManagementLoadResult.unsupported(),
+      ErrorResponse(:final error) => PluginManagementLoadResult.failure(error: error),
+    };
+  }
+
+  Future<PluginManagementMutationResult> command({
+    required String pluginId,
+    required PluginLifecycleCommandRequest request,
+  }) {
+    return _mapMutation(
+      future: _api.command(pluginId: pluginId, request: request),
+    );
+  }
+
+  Future<PluginManagementMutationResult> updateIdleTimeout({required PluginIdleTimeoutUpdateRequest request}) {
+    return _mapMutation(future: _api.updateIdleTimeout(request: request));
+  }
+
+  Future<PluginManagementMutationResult> _mapMutation({
+    required Future<ApiResponse<PluginManagementResponse>> future,
+  }) async {
+    return switch (await future) {
+      SuccessResponse(:final data) => PluginManagementMutationResult.success(response: data),
+      ErrorResponse(error: NonSuccessCodeError(errorCode: 404)) => const PluginManagementMutationResult.notFound(),
+      ErrorResponse(error: NonSuccessCodeError(errorCode: 409, rawErrorString: final body)) => _mapConflict(body: body),
+      // Management handlers use 503 when a mutation committed but its identity
+      // fence moved before they could publish an authoritative response.
+      ErrorResponse(error: NonSuccessCodeError(errorCode: 503)) => const PluginManagementMutationResult.uncertain(),
+      // A sent mutation whose outcome cannot be proven may have committed;
+      // never surface it as a retryable ordinary failure. This covers an
+      // undecodable or empty 2xx body and a post-dispatch response loss.
+      ErrorResponse(
+        error: JsonParsingError() ||
+            EmptyResponseError() ||
+            DartHttpClientError(innerError: TimeoutException() || RelayResponseLostException()),
+      ) =>
+        const PluginManagementMutationResult.uncertain(),
+      ErrorResponse(:final error) => PluginManagementMutationResult.failure(error: error),
+    };
+  }
+
+  PluginManagementMutationResult _mapConflict({required String? body}) {
+    if (body != null) {
+      try {
+        return PluginManagementMutationResult.conflict(
+          conflict: PluginLifecycleConflict.fromJson(jsonDecodeMap(body)),
+        );
+      } on Object {
+        // The typed failure below is the single observable outcome.
+      }
+    }
+    return PluginManagementMutationResult.failure(
+      error: ApiError.nonSuccessCode(errorCode: 409, rawErrorString: body),
+    );
+  }
 
   Future<ApiResponse<PluginListResponse>> listPlugins() async {
     final response = await _api.listPlugins();

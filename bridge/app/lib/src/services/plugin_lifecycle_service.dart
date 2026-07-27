@@ -2,11 +2,14 @@ import "dart:async";
 import "dart:convert";
 import "dart:math";
 
+import "package:collection/collection.dart";
+import "package:meta/meta.dart";
 import "package:rxdart/rxdart.dart";
 import "package:sesori_plugin_interface/sesori_plugin_interface.dart";
 import "package:sesori_shared/sesori_shared.dart" hide PluginRuntimeState;
 import "package:sesori_shared/sesori_shared.dart" as shared show PluginRuntimeState;
 
+import "../auth/bridge_id_provider.dart";
 import "../bridge/runtime/plugin_runtime.dart";
 import "../repositories/bridge_settings.dart";
 import "../repositories/bridge_settings_repository.dart";
@@ -41,15 +44,18 @@ class PluginLifecycleService {
     required String preferredDefaultPluginId,
     required BridgeSettingsRepository bridgeSettingsRepository,
     required PluginIdleTimerScheduler idleTimerScheduler,
+    required BridgeIdProvider bridgeIdProvider,
   }) : _lifecycleRepository = lifecycleRepository,
        _preferredDefaultPluginId = preferredDefaultPluginId,
        _bridgeSettingsRepository = bridgeSettingsRepository,
-       _idleTimerScheduler = idleTimerScheduler;
+       _idleTimerScheduler = idleTimerScheduler,
+       _bridgeIdProvider = bridgeIdProvider;
 
   final PluginLifecycleRepository _lifecycleRepository;
   final String _preferredDefaultPluginId;
   final BridgeSettingsRepository _bridgeSettingsRepository;
   final PluginIdleTimerScheduler _idleTimerScheduler;
+  final BridgeIdProvider _bridgeIdProvider;
   List<RegisteredPluginMetadata>? _registeredPlugins;
   Set<String>? _knownPluginIds;
   Map<String, PluginResidencyPolicy>? _residencyPolicyById;
@@ -66,7 +72,7 @@ class PluginLifecycleService {
   final Map<String, _ActivePluginCommand> _activePluginCommands = {};
   final Set<String> _deferredReadyPluginIds = {};
   final Map<String, ({Duration duration, Timer timer})> _idleTimers = {};
-  PluginManagementResponse? _lastPublishedManagementSnapshot;
+  _PluginManagementSnapshot? _lastPublishedManagementSnapshot;
   final Random _random = Random.secure();
   bool _disposing = false;
 
@@ -122,7 +128,7 @@ class PluginLifecycleService {
       _buildReadyPluginIds(_lifecycleRepository.snapshot),
     );
     if (_hasCompleteManagementRuntimeSnapshot) {
-      _lastPublishedManagementSnapshot = _buildManagementResponse(snapshotToken: _newManagementSnapshotToken());
+      _lastPublishedManagementSnapshot = _buildManagementSnapshot(snapshotToken: _newManagementSnapshotToken());
     }
     _runtimeSubscription = _lifecycleRepository.snapshots.listen(_applyRuntimeSnapshots);
     return (
@@ -174,12 +180,37 @@ class PluginLifecycleService {
   }
 
   PluginManagementResponse get managementSnapshot {
+    final snapshot = _requireManagementSnapshot();
+    return _buildManagementResponse(snapshot: snapshot, bridgeId: _requireBridgeId());
+  }
+
+  _PluginManagementSnapshot _requireManagementSnapshot() {
     if (_registeredPlugins == null || _setupById == null) {
       throw StateError("Plugin lifecycle has not been initialized.");
     }
     final snapshot = _lastPublishedManagementSnapshot;
     if (snapshot == null) throw StateError("Plugin management snapshot is not ready.");
     return snapshot;
+  }
+
+  PluginManagementResponse _buildManagementResponse({
+    required _PluginManagementSnapshot snapshot,
+    required String bridgeId,
+  }) {
+    return PluginManagementResponse(
+      snapshotToken: snapshot.snapshotToken,
+      bridgeId: bridgeId,
+      defaultPluginId: snapshot.defaultPluginId,
+      defaultIdleTimeoutMins: snapshot.defaultIdleTimeoutMins,
+      plugins: snapshot.plugins,
+    );
+  }
+
+  PluginManagementResponse get _managementSnapshotAfterMutation {
+    final snapshot = _requireManagementSnapshot();
+    final bridgeId = _bridgeIdProvider.bridgeId;
+    if (bridgeId == null) throw const PluginManagementMutationOutcomeUncertainException();
+    return _buildManagementResponse(snapshot: snapshot, bridgeId: bridgeId);
   }
 
   Stream<List<PluginMetadata>> get metadataSnapshots {
@@ -210,6 +241,7 @@ class PluginLifecycleService {
     if (_lastPublishedManagementSnapshot == null) {
       throw StateError("Plugin management snapshot is not ready.");
     }
+    _requireBridgeId();
     final active = _activePluginCommands[pluginId];
     if (active != null) {
       if (active.request == request) return active.completer.future;
@@ -245,7 +277,9 @@ class PluginLifecycleService {
           throw PluginManagementPluginNotFoundException(pluginId);
         }
     }
+    _requireBridgeId();
     return _withSettingsMutationTail(() async {
+      _requireBridgeId();
       final current = await _bridgeSettingsRepository.loadSettings();
       final plugins = switch (request) {
         PluginIdleTimeoutApplyAllRequest(:final idleTimeoutMins) => current.plugins.withDefaultIdleTimeout(
@@ -259,10 +293,11 @@ class PluginLifecycleService {
           idleTimeoutMins: null,
         ),
       };
+      _requireBridgeId();
       await _bridgeSettingsRepository.saveSettings(settings: current.copyWith(plugins: plugins));
       _syncIdleTimers(_lifecycleRepository.snapshot);
       _publishManagementIfChanged();
-      return managementSnapshot;
+      return _managementSnapshotAfterMutation;
     });
   }
 
@@ -305,10 +340,20 @@ class PluginLifecycleService {
     }
     _publishManagementIfChanged();
     if (failure == null) {
-      command.completer.complete(managementSnapshot);
+      try {
+        command.completer.complete(_managementSnapshotAfterMutation);
+      } on Object catch (error, stackTrace) {
+        command.completer.completeError(error, stackTrace);
+      }
     } else {
       command.completer.completeError(failure, failureStackTrace);
     }
+  }
+
+  String _requireBridgeId() {
+    final bridgeId = _bridgeIdProvider.bridgeId;
+    if (bridgeId == null) throw StateError("Bridge identity is not registered.");
+    return bridgeId;
   }
 
   Future<void> _enable({required String pluginId, required _ActivePluginCommand command}) async {
@@ -657,13 +702,13 @@ class PluginLifecycleService {
     return _managementRow(plugin: plugin);
   }
 
-  PluginManagementResponse _buildManagementResponse({required String? snapshotToken}) {
+  _PluginManagementSnapshot _buildManagementSnapshot({required String? snapshotToken}) {
     final registeredPlugins = _registeredPlugins;
     if (registeredPlugins == null || _setupById == null) {
       throw StateError("Plugin lifecycle has not been initialized.");
     }
     final settings = _bridgeSettingsRepository.currentSettings;
-    return PluginManagementResponse(
+    return _PluginManagementSnapshot(
       snapshotToken: snapshotToken,
       defaultPluginId: _selectableDefaultPluginId(),
       defaultIdleTimeoutMins: settings.plugins.defaults.idleTimeoutMins ?? defaultPluginIdleTimeoutMins,
@@ -675,13 +720,13 @@ class PluginLifecycleService {
     if (_managementSnapshotTokenController.isClosed || !_hasCompleteManagementRuntimeSnapshot) return;
     final previous = _lastPublishedManagementSnapshot;
     if (previous == null) {
-      _lastPublishedManagementSnapshot = _buildManagementResponse(snapshotToken: _newManagementSnapshotToken());
+      _lastPublishedManagementSnapshot = _buildManagementSnapshot(snapshotToken: _newManagementSnapshotToken());
       return;
     }
-    final next = _buildManagementResponse(snapshotToken: previous.snapshotToken);
+    final next = _buildManagementSnapshot(snapshotToken: previous.snapshotToken);
     if (previous == next) return;
     final snapshotToken = _newManagementSnapshotToken();
-    _lastPublishedManagementSnapshot = next.copyWith(snapshotToken: snapshotToken);
+    _lastPublishedManagementSnapshot = next.withSnapshotToken(snapshotToken: snapshotToken);
     _managementSnapshotTokenController.add(snapshotToken);
   }
 
@@ -887,6 +932,52 @@ class PluginLifecycleService {
   };
 }
 
+@immutable
+final class _PluginManagementSnapshot {
+  static const _pluginsEquality = ListEquality<PluginManagementMetadata>();
+
+  final String? snapshotToken;
+  final String? defaultPluginId;
+  final int defaultIdleTimeoutMins;
+  final List<PluginManagementMetadata> plugins;
+
+  const _PluginManagementSnapshot({
+    required this.snapshotToken,
+    required this.defaultPluginId,
+    required this.defaultIdleTimeoutMins,
+    required this.plugins,
+  });
+
+  _PluginManagementSnapshot withSnapshotToken({required String snapshotToken}) {
+    return _PluginManagementSnapshot(
+      snapshotToken: snapshotToken,
+      defaultPluginId: defaultPluginId,
+      defaultIdleTimeoutMins: defaultIdleTimeoutMins,
+      plugins: plugins,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return identical(this, other) ||
+        other is _PluginManagementSnapshot &&
+            snapshotToken == other.snapshotToken &&
+            defaultPluginId == other.defaultPluginId &&
+            defaultIdleTimeoutMins == other.defaultIdleTimeoutMins &&
+            _pluginsEquality.equals(plugins, other.plugins);
+  }
+
+  @override
+  int get hashCode {
+    return Object.hash(
+      snapshotToken,
+      defaultPluginId,
+      defaultIdleTimeoutMins,
+      _pluginsEquality.hash(plugins),
+    );
+  }
+}
+
 class PluginManagementPluginNotFoundException implements Exception {
   const PluginManagementPluginNotFoundException(this.pluginId);
 
@@ -906,6 +997,10 @@ class PluginManagementCommandFailedException implements Exception {
 
   @override
   String toString() => message;
+}
+
+class PluginManagementMutationOutcomeUncertainException implements Exception {
+  const PluginManagementMutationOutcomeUncertainException();
 }
 
 class _ActivePluginCommand {

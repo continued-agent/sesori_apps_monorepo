@@ -226,12 +226,16 @@ Production files:
 ### Scope
 
 Add nullable `bridgeId` to shared `PluginManagementResponse` and regenerate its
-companions. `GetPluginManagementHandler` emits the existing
-`BridgeIdProvider.currentBridgeId` alongside the Stage 12 snapshot. The field
-is additive, decodes from older Stage 12 bridges as null, is omitted when
-null, and receives a dated compatibility comment. Mutations return the same
-identity-bearing response shape, so GET and mutation completions carry the same
-authoritative bridge identity.
+companions. Compose the existing `BridgeRegistrationService` before
+`PluginLifecycleService`, inject it through `BridgeIdProvider`, and have the
+lifecycle service cache only private identity-free management state. It builds
+the transport response when returning, requires the provider's current bridge
+ID to be non-null, and fails closed before registration rather than publishing
+an ambiguous modern snapshot or dispatching/persisting a mutation. The wire
+field remains nullable only so newer
+clients decode older Stage 12 bridges that omit it; null is omitted and receives
+a dated compatibility comment. GET and mutation handlers remain pass-through
+consumers of the same authoritative, identity-bearing service response shape.
 
 Extend `PluginApi` using the current Stage 12 routes:
 
@@ -304,6 +308,8 @@ Extend `PluginRepository`:
   not ordinary failure: the bridge may have committed the mutation, and a
   retryable-looking failure could execute it twice. The service schedules the
   authoritative GET required to learn the outcome.
+- A bridge mutation that commits before its identity fence moves returns 503;
+  the repository also maps that explicit post-commit response to `uncertain`.
 - `uncertain` represents a mutation whose request was sent but whose outcome
   cannot be truthfully published because the response cannot prove it or the
   connection/service fence moved. Consumers render it as an uncertain state
@@ -318,7 +324,8 @@ Production files:
 
 - `shared/sesori_shared/lib/src/models/sesori/plugin_management.dart` and
   regenerated companions
-- `bridge/app/lib/src/routing/get_plugin_management_handler.dart`
+- `bridge/app/lib/src/bridge/runtime/bridge_runtime_runner.dart`
+- `bridge/app/lib/src/services/plugin_lifecycle_service.dart`
 - `client/module_core/lib/src/api/plugin_api.dart`
 - `client/module_core/lib/src/repositories/models/plugin_management_result.dart`
 - `client/module_core/lib/src/repositories/plugin_repository.dart`

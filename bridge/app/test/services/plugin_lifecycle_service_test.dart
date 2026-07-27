@@ -12,6 +12,7 @@ import "package:test/test.dart";
 
 import "../helpers/plugin_lifecycle_test_support.dart";
 import "../helpers/plugin_runtime_test_support.dart";
+import "../helpers/test_helpers.dart";
 
 void main() {
   test("derives alphabetical eligibility and default from setup", () {
@@ -149,12 +150,14 @@ void main() {
         ),
       ),
     );
+    final bridgeIdProvider = FakeBridgeIdProvider();
     final service =
         PluginLifecycleService(
             lifecycleRepository: PluginLifecycleRepository(runtime: runtime),
             preferredDefaultPluginId: legacyMissingPluginId,
             bridgeSettingsRepository: settingsRepository,
             idleTimerScheduler: const PluginIdleTimerScheduler(),
+            bridgeIdProvider: bridgeIdProvider,
           )
           ..registerPlugins(
             plugins: const [
@@ -173,8 +176,28 @@ void main() {
           );
     addTearDown(service.dispose);
 
+    // Lifecycle initialization precedes bridge registration in the runtime;
+    // management must fail closed until the authority supplies an identity,
+    // then attach that current identity when returning.
+    expect(() => service.managementSnapshot, throwsStateError);
+    expect(
+      () => service.command(
+        pluginId: "opencode",
+        request: const PluginLifecycleCommandRequest.refresh(),
+      ),
+      throwsStateError,
+    );
+    expect(
+      () => service.updateIdleTimeout(
+        request: const PluginIdleTimeoutUpdateRequest.applyAll(idleTimeoutMins: 60),
+      ),
+      throwsStateError,
+    );
+    expect(settingsRepository.currentSettings.plugins.defaults.idleTimeoutMins, 30);
+    bridgeIdProvider.id = "br_test1234";
     final response = service.managementSnapshot;
 
+    expect(response.bridgeId, "br_test1234");
     expect(response.defaultPluginId, "opencode");
     expect(response.defaultIdleTimeoutMins, 30);
     expect(response.plugins.map((plugin) => plugin.setup.id), ["alpha", "beta", "opencode"]);
@@ -358,6 +381,49 @@ void main() {
     );
   });
 
+  test("queued idle timeout writes fail closed after bridge identity is revoked", () async {
+    final repository = _IdleLifecycleRepository();
+    addTearDown(repository.dispose);
+    final settingsRepository = _MutableBridgeSettingsRepository(settings: const BridgeSettings())
+      ..saveGate = Completer<void>();
+    final bridgeIdProvider = FakeBridgeIdProvider("br_test1234");
+    final service =
+        PluginLifecycleService(
+            lifecycleRepository: repository,
+            preferredDefaultPluginId: legacyMissingPluginId,
+            bridgeSettingsRepository: settingsRepository,
+            idleTimerScheduler: const PluginIdleTimerScheduler(),
+            bridgeIdProvider: bridgeIdProvider,
+          )
+          ..registerPlugins(
+            plugins: const [
+              (id: "one", displayName: "One", residencyPolicy: PluginResidencyPolicy.transient),
+            ],
+          )
+          ..initialize(
+            disabledPluginIds: const {},
+            setupById: const {"one": PluginSetupReady()},
+          );
+    addTearDown(service.dispose);
+
+    final active = service.updateIdleTimeout(
+      request: const PluginIdleTimeoutUpdateRequest.applyAll(idleTimeoutMins: 30),
+    );
+    await settingsRepository.saveStarted.future;
+    final queued = service.updateIdleTimeout(
+      request: const PluginIdleTimeoutUpdateRequest.setOverride(pluginId: "one", idleTimeoutMins: 45),
+    );
+    bridgeIdProvider.id = null;
+    final activeExpectation = expectLater(active, throwsA(isA<PluginManagementMutationOutcomeUncertainException>()));
+    final queuedExpectation = expectLater(queued, throwsStateError);
+    settingsRepository.saveGate!.complete();
+
+    await Future.wait([activeExpectation, queuedExpectation]);
+    expect(settingsRepository.loadCalls, 1);
+    expect(settingsRepository.settings.plugins.defaults.idleTimeoutMins, 30);
+    expect(settingsRepository.settings.plugins.settingsByPluginId, isEmpty);
+  });
+
   test("successful timeout writes resync live timers while failed writes change nothing", () async {
     final repository = _IdleLifecycleRepository();
     addTearDown(repository.dispose);
@@ -470,6 +536,7 @@ void main() {
             preferredDefaultPluginId: legacyMissingPluginId,
             bridgeSettingsRepository: settingsRepository,
             idleTimerScheduler: const PluginIdleTimerScheduler(),
+            bridgeIdProvider: FakeBridgeIdProvider("br_test1234"),
           )
           ..registerPlugins(
             plugins: const [
@@ -517,6 +584,7 @@ void main() {
             preferredDefaultPluginId: legacyMissingPluginId,
             bridgeSettingsRepository: settingsRepository,
             idleTimerScheduler: const PluginIdleTimerScheduler(),
+            bridgeIdProvider: FakeBridgeIdProvider("br_test1234"),
           )
           ..registerPlugins(
             plugins: const [
@@ -555,6 +623,44 @@ void main() {
     await safe;
   });
 
+  test("command completion marks identity loss after dispatch as uncertain without hanging", () async {
+    final runtime = createRegisteredTestPluginRuntime(pluginIds: const ["one"]);
+    final settingsRepository = _MutableBridgeSettingsRepository(settings: const BridgeSettings())
+      ..saveGate = Completer<void>();
+    final bridgeIdProvider = FakeBridgeIdProvider("br_test1234");
+    final service =
+        PluginLifecycleService(
+            lifecycleRepository: PluginLifecycleRepository(runtime: runtime),
+            preferredDefaultPluginId: legacyMissingPluginId,
+            bridgeSettingsRepository: settingsRepository,
+            idleTimerScheduler: const PluginIdleTimerScheduler(),
+            bridgeIdProvider: bridgeIdProvider,
+          )
+          ..registerPlugins(
+            plugins: const [
+              (id: "one", displayName: "One", residencyPolicy: PluginResidencyPolicy.transient),
+            ],
+          )
+          ..initialize(
+            disabledPluginIds: const {},
+            setupById: const {"one": PluginSetupReady()},
+          );
+    addTearDown(() async {
+      await service.dispose();
+      await runtime.dispose();
+    });
+
+    final response = service.command(
+      pluginId: "one",
+      request: const PluginLifecycleCommandRequest.disable(mode: PluginStopMode.safe),
+    );
+    await settingsRepository.saveStarted.future;
+    bridgeIdProvider.id = null;
+    settingsRepository.saveGate!.complete();
+
+    await expectLater(response, throwsA(isA<PluginManagementMutationOutcomeUncertainException>()));
+  });
+
   test("failed disable persistence rolls runtime access back and allows retry", () async {
     final runtime = createRegisteredTestPluginRuntime(pluginIds: const ["one"]);
     final settingsRepository = _MutableBridgeSettingsRepository(settings: const BridgeSettings())
@@ -565,6 +671,7 @@ void main() {
             preferredDefaultPluginId: legacyMissingPluginId,
             bridgeSettingsRepository: settingsRepository,
             idleTimerScheduler: const PluginIdleTimerScheduler(),
+            bridgeIdProvider: FakeBridgeIdProvider("br_test1234"),
           )
           ..registerPlugins(
             plugins: const [
@@ -916,6 +1023,7 @@ void main() {
           preferredDefaultPluginId: legacyMissingPluginId,
           bridgeSettingsRepository: createTestBridgeSettingsRepository(),
           idleTimerScheduler: const PluginIdleTimerScheduler(),
+          bridgeIdProvider: FakeBridgeIdProvider("br_test1234"),
         )..registerPlugins(
           plugins: const [
             (id: "one", displayName: "One", residencyPolicy: PluginResidencyPolicy.transient),
@@ -941,6 +1049,7 @@ void main() {
           preferredDefaultPluginId: legacyMissingPluginId,
           bridgeSettingsRepository: createTestBridgeSettingsRepository(),
           idleTimerScheduler: timerScheduler,
+          bridgeIdProvider: FakeBridgeIdProvider("br_test1234"),
         )..registerPlugins(
           plugins: const [
             (id: "one", displayName: "One", residencyPolicy: PluginResidencyPolicy.transient),
@@ -983,6 +1092,7 @@ void main() {
             ),
           ),
           idleTimerScheduler: timerScheduler,
+          bridgeIdProvider: FakeBridgeIdProvider("br_test1234"),
         )..registerPlugins(
           plugins: const [
             (id: "one", displayName: "One", residencyPolicy: PluginResidencyPolicy.transient),
@@ -1020,6 +1130,7 @@ void main() {
           preferredDefaultPluginId: legacyMissingPluginId,
           bridgeSettingsRepository: settingsRepository,
           idleTimerScheduler: timerScheduler,
+          bridgeIdProvider: FakeBridgeIdProvider("br_test1234"),
         )..registerPlugins(
           plugins: const [
             (id: "one", displayName: "One", residencyPolicy: PluginResidencyPolicy.resident),
@@ -1049,6 +1160,7 @@ PluginLifecycleService _service({
     preferredDefaultPluginId: legacyMissingPluginId,
     bridgeSettingsRepository: createTestBridgeSettingsRepository(),
     idleTimerScheduler: const PluginIdleTimerScheduler(),
+    bridgeIdProvider: FakeBridgeIdProvider("br_test1234"),
   )..registerPlugins(plugins: plugins);
 }
 
@@ -1063,6 +1175,7 @@ PluginLifecycleService _singleIdleService({
       preferredDefaultPluginId: legacyMissingPluginId,
       bridgeSettingsRepository: settingsRepository,
       idleTimerScheduler: timerScheduler,
+      bridgeIdProvider: FakeBridgeIdProvider("br_test1234"),
     )
     ..registerPlugins(
       plugins: [(id: "one", displayName: "One", residencyPolicy: residencyPolicy)],
@@ -1082,6 +1195,7 @@ PluginLifecycleService _commandService({
     preferredDefaultPluginId: legacyMissingPluginId,
     bridgeSettingsRepository: settingsRepository ?? createTestBridgeSettingsRepository(),
     idleTimerScheduler: const PluginIdleTimerScheduler(),
+    bridgeIdProvider: FakeBridgeIdProvider("br_test1234"),
   )..registerPlugins(
     plugins: const [
       (id: "one", displayName: "One", residencyPolicy: PluginResidencyPolicy.transient),

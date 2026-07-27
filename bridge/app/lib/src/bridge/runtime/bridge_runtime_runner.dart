@@ -559,6 +559,24 @@ class BridgeRuntimeRunner {
         accessToken: authAccessToken,
       );
 
+      // Supervised mode built this early so the control dispatcher could route
+      // logout. Standalone can build it now that interactive authentication has
+      // produced its token refresher. Construct it before the lifecycle service
+      // so every management snapshot receives its authoritative bridge identity
+      // at the owning service boundary rather than at individual handlers.
+      final BridgeRegistrationService bridgeRegistrationService;
+      if (supervisedRegistrationService != null) {
+        bridgeRegistrationService = supervisedRegistrationService;
+      } else {
+        bridgeRegistrationService = _buildRegistrationService(
+          httpClient: httpClient,
+          authBackendUrl: options.authBackendUrl,
+          tokenRefresher: tokenRefresher,
+          bridgeIdStorage: bridgeIdStorage,
+        );
+        shutdownCoordinator.add(disposable: bridgeRegistrationService.dispose);
+      }
+
       final currentBridgeIdentity = await _resolveCurrentBridgeIdentity(
         processRepository: processRepository,
         currentUser: currentUser,
@@ -615,6 +633,7 @@ class BridgeRuntimeRunner {
             preferredDefaultPluginId: preferredDefaultPluginId,
             bridgeSettingsRepository: bridgeSettingsRepository,
             idleTimerScheduler: const PluginIdleTimerScheduler(),
+            bridgeIdProvider: bridgeRegistrationService,
           )..registerPlugins(
             plugins: [
               for (final descriptor in knownPlugins)
@@ -698,22 +717,6 @@ class BridgeRuntimeRunner {
       for (final pluginId in startupPolicy.eligiblePluginIds) {
         final diagnostics = activePluginRuntime.describe(pluginId: pluginId);
         if (diagnostics != null) Console.message("Target [$pluginId]: ${diagnostics.endpoint ?? pluginId}");
-      }
-
-      // Supervised mode already built this early (so the dispatcher could route
-      // the logout command); reuse that instance. Standalone builds it here, now
-      // that the interactive auth flow has produced its token refresher.
-      final BridgeRegistrationService bridgeRegistrationService;
-      if (supervisedRegistrationService != null) {
-        bridgeRegistrationService = supervisedRegistrationService;
-      } else {
-        bridgeRegistrationService = _buildRegistrationService(
-          httpClient: httpClient,
-          authBackendUrl: options.authBackendUrl,
-          tokenRefresher: tokenRefresher,
-          bridgeIdStorage: bridgeIdStorage,
-        );
-        shutdownCoordinator.add(disposable: bridgeRegistrationService.dispose);
       }
 
       // Constructed here (not inside BridgeRuntime.create) so supervised mode

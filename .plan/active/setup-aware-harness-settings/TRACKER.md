@@ -3,16 +3,16 @@
 ## Current State
 
 - **Implementation base:** current `origin/main` after Stage 12 merge `6cedf5bd`
-- **Series state:** Step 1/7 in review
-- **Next action:** wait for PR #579 review to settle, then run the confirming
-  simulator E2E pass before merge
+- **Series state:** Step 2/7 in review
+- **Next action:** wait for PR #583 review to settle, then run the confirming
+  E2E checks before merge
 
 ## Delivery
 
 | Done | Slice | Branch | PR state |
 |---|---|---|---|
-| [ ] | Step 1/7 — per-bridge harness preference | `setup-aware-harness-settings-preferences` | PR #579 in review; 729 changed lines (estimate 650-750) |
-| [ ] | Step 2/7 — management transport | `setup-aware-harness-settings-transport` | planned; estimate 300-400 changed lines |
+| [x] | Step 1/7 — per-bridge harness preference | `setup-aware-harness-settings-preferences` | PR #579 merged; 729 changed lines (estimate 650-750) |
+| [ ] | Step 2/7 — management transport | `setup-aware-harness-settings-transport` | PR #583 in review; ~590 changed lines (estimate 300-400, test-driven overage) |
 | [ ] | Step 3/7 — synchronization service | `setup-aware-harness-settings-service` | planned; estimate 550-700 changed lines |
 | [ ] | Step 4/7 — harness logos | `setup-aware-harness-settings-branding` | planned; estimate 750-900 changed lines |
 | [ ] | Step 5/7 — Harnesses overview and state contract | `setup-aware-harness-settings-overview` | planned; estimate 1,100-1,300 changed lines |
@@ -53,3 +53,24 @@
   final head `b529a8a8` re-verified restored-preference selection, Codex
   persistence across reopen, and disable fallback with full cleanup; A-to-B
   bridge switch stays unit-tested only (single-bridge dev account).
+- Step 2/7 (2026-07-27): shared contract tests for known/null/omitted
+  `bridgeId`; full bridge suite (2148); module_core full suite (657) with new
+  API route and repository mapping
+  tests; mobile/desktop fatal analysis; Aristotle implementation review
+  approved. Review fixes: lifecycle service caches identity-free state and
+  requires the provider's current ID before reads or mutation side effects,
+  including when a timeout write begins after waiting in the settings queue;
+  post-commit identity loss maps through HTTP 503 to typed `uncertain`;
+  single-report malformed conflicts, named parameters, encoded command path,
+  post-dispatch response loss mapped to `uncertain`.
+  Confirming E2E on `cbd10948`: all three management routes carried the dev
+  bridge identity on GET and both mutation shapes; Step 1 gate rerun passed;
+  full cleanup with the E2E bridge stopped. Final service-owned identity rerun
+  on `f0c4932d` again verified the same ID on GET, command, and idle-timeout
+  responses after late registration; override cleared, Codex re-enabled, and
+  bridge stopped (one external relay 429 was retried successfully). Final
+  mutation-guard rerun on `b0067458` verified registered GET, safe disable,
+  enable, timeout override, and timeout clear responses all carried
+  `br_qdF5_X5_LUM6zi7D`; the override was cleared, Codex re-enabled, the
+  temporary bridge stopped, and the unrelated bridge on port 7829 remained
+  untouched.

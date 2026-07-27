@@ -7,14 +7,16 @@ import "routing_test_helpers.dart";
 
 void main() {
   test("handles only GET /plugin/management", () {
-    final handler = GetPluginManagementHandler(lifecycleService: _FakePluginLifecycleService());
+    final handler = GetPluginManagementHandler(
+      lifecycleService: _FakePluginLifecycleService(),
+    );
 
     expect(handler.canHandle(makeRequest("GET", "/plugin/management")), isTrue);
     expect(handler.canHandle(makeRequest("POST", "/plugin/management")), isFalse);
     expect(handler.canHandle(makeRequest("GET", "/plugin/setup")), isFalse);
   });
 
-  test("returns the current lifecycle service snapshot", () async {
+  test("returns the current lifecycle service snapshot unchanged", () async {
     final response =
         await GetPluginManagementHandler(
           lifecycleService: _FakePluginLifecycleService(),
@@ -32,6 +34,7 @@ void main() {
 
 const _response = PluginManagementResponse(
   snapshotToken: "snapshot-token",
+  bridgeId: "br_test1234",
   defaultPluginId: "one",
   defaultIdleTimeoutMins: 10,
   plugins: [

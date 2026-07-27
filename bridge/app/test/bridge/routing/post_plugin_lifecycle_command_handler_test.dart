@@ -8,8 +8,11 @@ import "package:test/test.dart";
 import "routing_test_helpers.dart";
 
 void main() {
+  PostPluginLifecycleCommandHandler buildHandler({required _FakePluginLifecycleService service}) =>
+      PostPluginLifecycleCommandHandler(lifecycleService: service);
+
   test("PostPluginLifecycleCommandHandler handles only plugin command posts", () {
-    final handler = PostPluginLifecycleCommandHandler(lifecycleService: _FakePluginLifecycleService());
+    final handler = buildHandler(service: _FakePluginLifecycleService());
 
     expect(handler.canHandle(makeRequest("POST", "/plugin/one/command")), isTrue);
     expect(handler.canHandle(makeRequest("GET", "/plugin/one/command")), isFalse);
@@ -18,7 +21,7 @@ void main() {
 
   test("PostPluginLifecycleCommandHandler dispatches a typed disable command", () async {
     final service = _FakePluginLifecycleService();
-    final response = await PostPluginLifecycleCommandHandler(lifecycleService: service).handleInternal(
+    final response = await buildHandler(service: service).handleInternal(
       makeRequest(
         "POST",
         "/plugin/one/command",
@@ -32,12 +35,15 @@ void main() {
     expect(response.status, 200);
     expect(service.receivedPluginId, "one");
     expect(service.receivedRequest, const PluginLifecycleCommandRequest.disable(mode: PluginStopMode.safe));
-    expect(PluginManagementResponse.fromJson(jsonDecodeMap(response.body!)), _response);
+    expect(
+      PluginManagementResponse.fromJson(jsonDecodeMap(response.body!)),
+      _response,
+    );
   });
 
-  test("PostPluginLifecycleCommandHandler maps invalid, unknown, conflict, and failed commands", () async {
+  test("PostPluginLifecycleCommandHandler maps invalid, unknown, conflict, uncertain, and failed commands", () async {
     final service = _FakePluginLifecycleService();
-    final handler = PostPluginLifecycleCommandHandler(lifecycleService: service);
+    final handler = buildHandler(service: service);
 
     final invalid = await handler.handleInternal(
       makeRequest("POST", "/plugin/one/command", body: jsonEncode(const {"type": "disable"})),
@@ -49,6 +55,8 @@ void main() {
     final unknown = await _send(handler, pluginId: "missing");
     service.error = const PluginManagementConflictException(_conflict);
     final conflict = await _send(handler, pluginId: "one");
+    service.error = const PluginManagementMutationOutcomeUncertainException();
+    final uncertain = await _send(handler, pluginId: "one");
     service.error = const PluginManagementCommandFailedException("disk full");
     final failed = await _send(handler, pluginId: "one");
 
@@ -56,6 +64,7 @@ void main() {
     expect(unknown.status, 404);
     expect(conflict.status, 409);
     expect(PluginLifecycleConflict.fromJson(jsonDecodeMap(conflict.body!)), _conflict);
+    expect(uncertain.status, 503);
     expect(failed.status, 500);
     expect(failed.body, "plugin command failed");
   });
@@ -90,6 +99,7 @@ const _plugin = PluginManagementMetadata(
 
 const _response = PluginManagementResponse(
   snapshotToken: "snapshot-token",
+  bridgeId: "br_test1234",
   defaultPluginId: "one",
   defaultIdleTimeoutMins: 10,
   plugins: [_plugin],

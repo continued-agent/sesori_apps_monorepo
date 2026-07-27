@@ -8,8 +8,11 @@ import "package:test/test.dart";
 import "routing_test_helpers.dart";
 
 void main() {
+  PatchPluginIdleTimeoutHandler buildHandler({required _FakePluginLifecycleService service}) =>
+      PatchPluginIdleTimeoutHandler(lifecycleService: service);
+
   test("PatchPluginIdleTimeoutHandler handles only PATCH /plugin/idle-timeout", () {
-    final handler = PatchPluginIdleTimeoutHandler(lifecycleService: _FakePluginLifecycleService());
+    final handler = buildHandler(service: _FakePluginLifecycleService());
 
     expect(handler.canHandle(makeRequest("PATCH", "/plugin/idle-timeout")), isTrue);
     expect(handler.canHandle(makeRequest("GET", "/plugin/idle-timeout")), isFalse);
@@ -18,7 +21,7 @@ void main() {
 
   test("PatchPluginIdleTimeoutHandler returns the updated management snapshot", () async {
     final service = _FakePluginLifecycleService();
-    final response = await PatchPluginIdleTimeoutHandler(lifecycleService: service).handleInternal(
+    final response = await buildHandler(service: service).handleInternal(
       makeRequest(
         "PATCH",
         "/plugin/idle-timeout",
@@ -31,12 +34,15 @@ void main() {
 
     expect(response.status, 200);
     expect(service.receivedRequest, const PluginIdleTimeoutUpdateRequest.applyAll(idleTimeoutMins: 30));
-    expect(PluginManagementResponse.fromJson(jsonDecodeMap(response.body!)), _response);
+    expect(
+      PluginManagementResponse.fromJson(jsonDecodeMap(response.body!)),
+      _response,
+    );
   });
 
-  test("PatchPluginIdleTimeoutHandler maps invalid, unknown, and failed writes", () async {
+  test("PatchPluginIdleTimeoutHandler maps invalid, unknown, uncertain, and failed writes", () async {
     final service = _FakePluginLifecycleService();
-    final handler = PatchPluginIdleTimeoutHandler(lifecycleService: service);
+    final handler = buildHandler(service: service);
 
     final invalid = await handler.handleInternal(
       makeRequest(
@@ -59,6 +65,17 @@ void main() {
       queryParams: const {},
       fragment: null,
     );
+    service.error = const PluginManagementMutationOutcomeUncertainException();
+    final uncertain = await handler.handleInternal(
+      makeRequest(
+        "PATCH",
+        "/plugin/idle-timeout",
+        body: jsonEncode(const PluginIdleTimeoutUpdateRequest.clearOverride(pluginId: "one").toJson()),
+      ),
+      pathParams: const {},
+      queryParams: const {},
+      fragment: null,
+    );
     service.error = StateError("disk full");
     final failed = await handler.handleInternal(
       makeRequest(
@@ -73,12 +90,14 @@ void main() {
 
     expect(invalid.status, 400);
     expect(unknown.status, 404);
+    expect(uncertain.status, 503);
     expect(failed.status, 500);
   });
 }
 
 const _response = PluginManagementResponse(
   snapshotToken: "snapshot-token",
+  bridgeId: "br_test1234",
   defaultPluginId: "one",
   defaultIdleTimeoutMins: 30,
   plugins: [],
