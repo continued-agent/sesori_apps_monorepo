@@ -269,14 +269,14 @@ void main() {
               actionHint: "Restart the bridge to retry.",
             ),
             PluginMetadata(
-              id: "degraded-id",
+              id: "codex",
               displayName: "Second Tool",
               isDefault: true,
               state: PluginLifecycleState.degraded,
               actionHint: "Check the bridge console.",
             ),
             PluginMetadata(
-              id: "unavailable-id",
+              id: "cursor",
               displayName: "Third Tool",
               isDefault: false,
               state: PluginLifecycleState.unavailable,
@@ -298,21 +298,24 @@ void main() {
     expect(find.text("Unavailable"), findsOneWidget);
     expect(find.text("Restart the bridge to retry."), findsOneWidget);
     expect(find.text("Check the bridge console."), findsOneWidget);
+    expect(find.byIcon(TablerRegular.plug), findsOneWidget);
+    expect(find.byIcon(VESPRSolid.codex), findsOneWidget);
+    expect(find.byIcon(VESPRSolid.cursor), findsOneWidget);
 
     expect(
       tester.widget<InkWell>(find.byKey(const Key("new_session_plugin_failed-id"))).onTap,
       isNull,
     );
     expect(
-      tester.widget<InkWell>(find.byKey(const Key("new_session_plugin_unavailable-id"))).onTap,
+      tester.widget<InkWell>(find.byKey(const Key("new_session_plugin_cursor"))).onTap,
       isNull,
     );
     expect(
-      tester.widget<InkWell>(find.byKey(const Key("new_session_plugin_degraded-id"))).onTap,
+      tester.widget<InkWell>(find.byKey(const Key("new_session_plugin_codex"))).onTap,
       isNotNull,
     );
     expect(find.text("failed-id"), findsNothing);
-    expect(find.text("degraded-id"), findsNothing);
+    expect(find.text("codex"), findsNothing);
   });
 
   testWidgets("uses on-brand foreground tokens for a selected plugin in dark mode", (tester) async {

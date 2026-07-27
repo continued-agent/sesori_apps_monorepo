@@ -2,10 +2,10 @@
 
 ## Current State
 
-- **Implementation base:** `origin/main` at `ecd75b6c` after Step 2/7 merged
-- **Series state:** Step 3/7 in review
-- **Next action:** settle PR #589 review; the real integration E2E gate follows
-  Step 5/7
+- **Implementation base:** `origin/main` at `6fe69d5a` after Step 3/7 merged
+- **Series state:** Step 4/7 PR #590 in review
+- **Next action:** settle Step 4/7 review, then run its real
+  simulator logo E2E; the management-service integration E2E follows Step 5/7
 
 ## Delivery
 
@@ -13,8 +13,8 @@
 |---|---|---|---|
 | [x] | Step 1/7 — per-bridge harness preference | `setup-aware-harness-settings-preferences` | PR #579 merged; 729 changed lines (estimate 650-750) |
 | [x] | Step 2/7 — management transport | `setup-aware-harness-settings-transport` | PR #583 merged as `ecd75b6c`; ~660 changed lines (estimate 300-400, test-driven overage) |
-| [ ] | Step 3/7 — synchronization service | `setup-aware-harness-settings-service` | PR #589 in review; 1,095 changed lines (estimate 550-700, race-matrix test overage) |
-| [ ] | Step 4/7 — harness logos | `setup-aware-harness-settings-branding` | planned; estimate 750-900 changed lines |
+| [x] | Step 3/7 — synchronization service | `setup-aware-harness-settings-service` | PR #589 merged as `6fe69d5a`; 1,095 changed lines (estimate 550-700, race-matrix test overage) |
+| [ ] | Step 4/7 — harness logos | `setup-aware-harness-settings-branding` | PR #590 in review; simplified to use existing plugin IDs |
 | [ ] | Step 5/7 — Harnesses overview and state contract | `setup-aware-harness-settings-overview` | planned; estimate 1,100-1,300 changed lines |
 | [ ] | Step 6/7 — management actions | `setup-aware-harness-settings-state` | planned; estimate 650-800 changed lines |
 | [ ] | Step 7/7 — management controls | `setup-aware-harness-settings-controls` | planned; estimate 800-1,000 changed lines |
@@ -89,3 +89,16 @@
   transport-bounded refresh tail as required by the reviewed plan. Real
   integration E2E remains scheduled after Step 5/7, when the app resolves and
   renders this service.
+- Step 4/7 (2026-07-27): added the exported, decorative `PregoBrandLogo`
+  resolver with a generic fallback and integrated it into the new-session
+  chooser. The initial implementation introduced a separate nullable logo key
+  across plugin and wire contracts; product feedback removed that redundant
+  contract and made the Prego presentation boundary map the existing stable
+  plugin ID directly. A shared `Harness` enum now owns the three built-in IDs;
+  bridge producers and app presentation use `Harness.<value>.name`, while wire
+  contracts remain open strings and unknown IDs retain the generic fallback.
+  Full shared (337), focused Prego (5), mobile new-session (23), OpenCode (67),
+  Codex (17), and Cursor (41) tests pass; fatal analysis is clean in every
+  affected package. Aristotle approved the shared-enum dependency and open
+  string transport boundary. The real simulator logo E2E remains pending until
+  after PR review.
