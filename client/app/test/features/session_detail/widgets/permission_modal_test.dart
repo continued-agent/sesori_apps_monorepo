@@ -52,6 +52,8 @@ GoRouter _createRouter({
                     context,
                     permission: permission,
                     onReply: capture.onReply,
+                    isPendingStream: const Stream<bool>.empty(),
+                    isPending: () => true,
                   );
                 },
                 child: const Text("Open permission modal"),

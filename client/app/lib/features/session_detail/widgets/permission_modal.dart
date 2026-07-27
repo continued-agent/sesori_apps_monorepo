@@ -10,6 +10,7 @@ import "../../../core/extensions/build_context_x.dart";
 import "../../../core/extensions/text_style_x.dart";
 import "../../../core/widgets/copy_icon_button.dart";
 import "../../../core/widgets/markdown_styles.dart";
+import "pending_request_auto_dismiss.dart";
 
 /// Bottom sheet that presents a tool permission request from the AI assistant.
 ///
@@ -51,6 +52,8 @@ class PermissionModal extends StatelessWidget {
       required PermissionReply reply,
     })
     onReply,
+    required Stream<bool> isPendingStream,
+    required bool Function() isPending,
   }) {
     // Capture before presenting: inside the route the top inset reads as 0.
     final topInset = MediaQuery.paddingOf(context).top;
@@ -61,10 +64,14 @@ class PermissionModal extends StatelessWidget {
       // transparent. The sheet caps itself below the status bar.
       backgroundColor: Colors.transparent,
       useSafeArea: false,
-      builder: (_) => PermissionModal(
-        permission: permission,
-        onReply: onReply,
-        topInset: topInset,
+      builder: (_) => PendingRequestAutoDismiss(
+        isPendingStream: isPendingStream,
+        isPending: isPending,
+        child: PermissionModal(
+          permission: permission,
+          onReply: onReply,
+          topInset: topInset,
+        ),
       ),
     );
   }

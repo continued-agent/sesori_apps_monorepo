@@ -8,6 +8,7 @@ import "package:theme_prego/module_prego.dart";
 
 import "../../../core/extensions/build_context_x.dart";
 import "../../../core/widgets/markdown_styles.dart";
+import "pending_request_auto_dismiss.dart";
 
 /// Bottom sheet that presents all server-driven questions within a single
 /// [SesoriQuestionAsked] event, one at a time.
@@ -44,6 +45,8 @@ class QuestionModal extends StatefulWidget {
     required SesoriQuestionAsked question,
     required void Function(String requestId, List<ReplyAnswer> answers) onReply,
     required void Function(String requestId) onReject,
+    required Stream<bool> isPendingStream,
+    required bool Function() isPending,
   }) {
     // Capture before presenting: inside the route the top inset reads as 0.
     final topInset = MediaQuery.paddingOf(context).top;
@@ -54,11 +57,15 @@ class QuestionModal extends StatefulWidget {
       // transparent. The sheet caps itself below the status bar.
       backgroundColor: Colors.transparent,
       useSafeArea: false,
-      builder: (_) => QuestionModal(
-        question: question,
-        onReply: onReply,
-        onReject: onReject,
-        topInset: topInset,
+      builder: (_) => PendingRequestAutoDismiss(
+        isPendingStream: isPendingStream,
+        isPending: isPending,
+        child: QuestionModal(
+          question: question,
+          onReply: onReply,
+          onReject: onReject,
+          topInset: topInset,
+        ),
       ),
     );
   }
