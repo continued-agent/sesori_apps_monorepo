@@ -447,7 +447,11 @@ a second trigger. Only `ConnectionConnected` permits management HTTP. Offline,
 reconnecting, lost, and disconnected statuses reject or defer new attempts and
 fence any in-flight attempt by connection epoch.
 
-One private publication coordinator owns every snapshot application. Both GET
+One private publication coordinator owns every snapshot application. A
+connection-epoch or authoritative bridge-identity change immediately replaces
+the replayed snapshot with a loading publication so late subscribers cannot
+render facts from the prior bridge while the next authoritative GET is pending.
+Both GET
 and mutation completions capture `{connectionEpoch,
 publicationGeneration, staleGeneration, bridgeId}` before their request and
 revalidate that entire fence immediately before publishing. `bridgeId` comes
@@ -646,10 +650,6 @@ Construct a `PluginManagementCubit` through `BlocProvider(create:)` using
 `PluginManagementState` contract and its generated companion; Step 6 extends
 cubit behavior without replacing that state shape:
 
-```dart
-enum PluginManagementActionStatus { idle, inProgress }
-```
-
 The Step 3 service file owns `PluginManagementForceAction`; this state imports
 that Layer-3 domain enum rather than redefining it:
 
@@ -671,25 +671,61 @@ sealed class PluginManagementActionError
 
 ```dart
 @Freezed()
+sealed class PluginManagementRefreshState
+    with _$PluginManagementRefreshState {
+  const factory PluginManagementRefreshState.idle();
+  const factory PluginManagementRefreshState.failed({
+    required ApiError error,
+  });
+}
+
+@Freezed()
+sealed class PluginManagementActionTarget
+    with _$PluginManagementActionTarget {
+  const factory PluginManagementActionTarget.allHarnesses();
+  const factory PluginManagementActionTarget.harness({
+    required String pluginId,
+  });
+}
+
+@Freezed()
+sealed class PluginManagementActionState
+    with _$PluginManagementActionState {
+  const factory PluginManagementActionState.idle();
+  const factory PluginManagementActionState.inProgress({
+    required PluginManagementActionTarget target,
+  });
+  const factory PluginManagementActionState.failed({
+    required PluginManagementActionTarget target,
+    required PluginManagementActionError error,
+  });
+  const factory PluginManagementActionState.forceConfirmationRequired({
+    required String pluginId,
+    required PluginManagementForceAction action,
+    required PluginLifecycleConflict conflict,
+    required PluginLifecycleCommandRequest request,
+  });
+}
+
+@Freezed()
 sealed class PluginManagementState with _$PluginManagementState {
   const factory PluginManagementState.loading();
   const factory PluginManagementState.unsupported();
   const factory PluginManagementState.failure({required ApiError error});
   const factory PluginManagementState.ready({
     required PluginManagementResponse response,
-    required ApiError? refreshError,
-    required PluginManagementActionStatus actionStatus,
-    required String? actingPluginId,
-    required PluginManagementForceAction? pendingForceAction,
-    required PluginManagementActionError? actionError,
+    required PluginManagementRefreshState refresh,
+    required PluginManagementActionState action,
   });
 }
 ```
 
-The Step 5 cubit subscribes to the Step 3 replay stream, exposes `refresh()`,
-and emits ready with idle action fields. Mutation methods and controls remain
-out of this slice. A later refresh failure retains ready state with a
-dismissible `refreshError`.
+The Step 5 cubit subscribes to the Step 3 replay stream, exposes `refresh()` and
+`dismissRefreshError()`, and emits ready with idle refresh/action variants.
+Mutation methods and controls remain out of this slice. A later refresh failure
+retains ready state with a dismissible failed refresh variant. The nested sealed
+states keep refresh and action lifecycles independent without nullable
+coordination fields or a combinatorial outer-state union.
 
 The scaffold matches Notifications:
 
