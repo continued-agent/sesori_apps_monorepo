@@ -299,8 +299,16 @@ void main() {
     expect(find.text("Restart the bridge to retry."), findsOneWidget);
     expect(find.text("Check the bridge console."), findsOneWidget);
     expect(find.byIcon(TablerRegular.plug), findsOneWidget);
-    expect(find.byIcon(VESPRSolid.codex), findsOneWidget);
-    expect(find.byIcon(VESPRSolid.cursor), findsOneWidget);
+    expect(findBrandLogo("codex"), findsOneWidget);
+    expect(findBrandLogo("cursor"), findsOneWidget);
+
+    // The marks carry their own colours, so a row that can't be picked has to
+    // mute its artwork or it reads as active beside the row's greyed-out text.
+    double markOpacity(String pluginId) => tester
+        .widget<Opacity>(find.ancestor(of: findBrandLogo(pluginId), matching: find.byType(Opacity)).first)
+        .opacity;
+    expect(markOpacity("cursor"), lessThan(1.0));
+    expect(markOpacity("codex"), 1.0);
 
     expect(
       tester.widget<InkWell>(find.byKey(const Key("new_session_plugin_failed-id"))).onTap,

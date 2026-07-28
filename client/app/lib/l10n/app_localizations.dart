@@ -1597,6 +1597,12 @@ abstract class AppLocalizations {
   /// **'New activity'**
   String get sessionListNewActivity;
 
+  /// Screen-reader label for the harness driving a session; the visual signal is the brand logo leading the row. The harness name is a brand and is not translated.
+  ///
+  /// In en, this message translates to:
+  /// **'{harness} session'**
+  String sessionListHarness(String harness);
+
   /// Label shown next to the red dot for sessions that are active but in a retry/error state
   ///
   /// In en, this message translates to:
@@ -2358,6 +2364,30 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'{days}d ago'**
   String timestampDaysAgo(int days);
+
+  /// Shortest form of 'just now', for the few characters a session row's trailing slot can hold.
+  ///
+  /// In en, this message translates to:
+  /// **'now'**
+  String get timestampCompactNow;
+
+  /// Shortest form of '{minutes}m ago', for the few characters a session row's trailing slot can hold.
+  ///
+  /// In en, this message translates to:
+  /// **'{minutes}m'**
+  String timestampCompactMinutes(int minutes);
+
+  /// Shortest form of '{hours}h ago', for the few characters a session row's trailing slot can hold.
+  ///
+  /// In en, this message translates to:
+  /// **'{hours}h'**
+  String timestampCompactHours(int hours);
+
+  /// Shortest form of '{days}d ago', for the few characters a session row's trailing slot can hold.
+  ///
+  /// In en, this message translates to:
+  /// **'{days}d'**
+  String timestampCompactDays(int days);
 
   /// No description provided for @sessionDetailModelFallback.
   ///

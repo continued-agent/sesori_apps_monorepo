@@ -4,6 +4,7 @@ import "package:theme_prego/module_prego.dart";
 
 import "../../core/extensions/build_context_x.dart";
 import "../../l10n/app_localizations.dart";
+import "session_row_metrics.dart";
 
 // GitHub-inspired semantic status colors, chosen for light/dark contrast.
 const _kPrGreen = Color(0xFF3FB950);
@@ -33,9 +34,13 @@ class PrStatusRow extends StatelessWidget {
       children: [
         Tooltip(
           message: _mergeTooltip(loc: loc, status: pr.mergeableStatus),
-          child: Icon(mergeIcon, size: 14, color: mergeColor),
+          // The same slot the footer's other detail marks sit in, so the two
+          // details keep one rhythm across the line.
+          child: SizedBox(
+            width: kSessionRowIconSlotWidth,
+            child: Center(child: Icon(mergeIcon, size: kSessionRowDetailIconSize, color: mergeColor)),
+          ),
         ),
-        const SizedBox(width: 4),
         Flexible(
           child: Text(
             loc.prLabel(pr.number),
@@ -44,7 +49,7 @@ class PrStatusRow extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
           ),
         ),
-        const SizedBox(width: 6),
+        const SizedBox(width: 4),
         Flexible(
           child: Text(
             _stateText(loc: loc, state: pr.state),

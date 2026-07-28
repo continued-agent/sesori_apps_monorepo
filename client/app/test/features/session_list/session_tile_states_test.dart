@@ -8,9 +8,9 @@ import "package:theme_prego/module_prego.dart";
 
 import "../../helpers/test_helpers.dart";
 
-/// A session row is a title line led by the state sparkle, over an indented
-/// footer: branch, pull request, any state that needs words, and when the
-/// session last changed.
+/// A session row is a title line led by its harness logo and ended by either
+/// the state sparkle or when the session last changed, over an indented
+/// footer: branch, pull request and any state that needs words.
 ///
 /// A working row twinkles on an infinite repeating animation, so these tests
 /// pump fixed durations and never `pumpAndSettle` — it would pump to its
@@ -156,7 +156,7 @@ void main() {
     });
   });
 
-  testWidgets("a read, idle session shows no sparkle and only its footer", (tester) async {
+  testWidgets("a read, idle session shows no sparkle and tells the time instead", (tester) async {
     final session = testSession(
       title: "My Session",
       updatedAt: DateTime.now().millisecondsSinceEpoch,
@@ -166,7 +166,101 @@ void main() {
 
     expect(find.byType(PregoAiLoader), findsNothing);
     expect(titleWeight(tester, "My Session"), FontWeight.w400);
-    expect(find.text("just now"), findsOneWidget);
+    // The trailing slot is a few characters wide, so the time drops its
+    // phrasing rather than wrapping.
+    expect(find.text("now"), findsOneWidget);
+  });
+
+  group("the harness leading the title", () {
+    testWidgets("marks the row with the backend driving the session", (tester) async {
+      await pumpTile(tester, tile(session: testSession(title: "My Session", pluginId: "opencode")));
+      expect(findBrandLogo("opencode"), findsOneWidget);
+
+      await pumpTile(tester, tile(session: testSession(title: "My Session", pluginId: "codex")));
+      expect(findBrandLogo("codex"), findsOneWidget);
+    });
+
+    testWidgets("falls back to a plug for a harness this app doesn't know", (tester) async {
+      // A newer bridge can advertise harnesses this build has never heard of;
+      // the slot still has to hold something.
+      await pumpTile(tester, tile(session: testSession(title: "My Session", pluginId: "harness-from-the-future")));
+
+      expect(find.byIcon(TablerRegular.plug), findsOneWidget);
+    });
+
+    testWidgets("names the harness for assistive technology", (tester) async {
+      final semantics = tester.ensureSemantics();
+
+      // The logo is the row's only backend cue, so two otherwise-identical
+      // sessions have to be told apart by ear as well as by eye.
+      await pumpTile(tester, tile(session: testSession(title: "My Session", pluginId: "opencode")));
+      expect(find.bySemanticsLabel(RegExp("OpenCode session")), findsOneWidget);
+
+      await pumpTile(tester, tile(session: testSession(title: "My Session", pluginId: "harness-from-the-future")));
+      expect(find.bySemanticsLabel(RegExp("harness-from-the-future session")), findsOneWidget);
+
+      semantics.dispose();
+    });
+  });
+
+  group("the trailing slot", () {
+    testWidgets("gives the time up to the sparkle while the session has one", (tester) async {
+      final session = testSession(title: "My Session", updatedAt: DateTime.now().millisecondsSinceEpoch);
+
+      await pumpTile(tester, tile(session: session, isActive: true));
+      expect(find.text("now"), findsNothing);
+
+      await pumpTile(tester, tile(session: session, unseen: true));
+      expect(find.text("now"), findsNothing);
+    });
+
+    testWidgets("keeps a session older than the relative window to one narrow line", (tester) async {
+      // Past 30 days the slot shows a date, and some locales write those with
+      // spaces; it holds one line so a stale session can't reshape the row.
+      await pumpTile(tester, tile(session: testSession(title: "My Session", updatedAt: 1700000000000)));
+
+      final stamp = tester.widget<Text>(find.textContaining("2023"));
+      expect(stamp.maxLines, 1);
+      expect(stamp.softWrap, isFalse);
+    });
+
+    testWidgets("spells the year of a session from an earlier one", (tester) async {
+      final lastYear = DateTime(DateTime.now().year - 1, 6, 15);
+
+      await pumpTile(
+        tester,
+        tile(session: testSession(title: "My Session", updatedAt: lastYear.millisecondsSinceEpoch)),
+      );
+
+      expect(find.textContaining("${lastYear.year}"), findsOneWidget);
+    });
+
+    testWidgets("leaves the year off a session from this one", (tester) async {
+      // The year only earns the slot's width when leaving it out would be
+      // ambiguous. (In the first weeks of January this date is still inside
+      // the relative window, which spells no year either.)
+      final thisYear = DateTime(DateTime.now().year);
+
+      await pumpTile(
+        tester,
+        tile(session: testSession(title: "My Session", updatedAt: thisYear.millisecondsSinceEpoch)),
+      );
+
+      expect(find.textContaining("${thisYear.year}"), findsNothing);
+    });
+
+    testWidgets("still speaks the time the sparkle took the space from, after the state", (tester) async {
+      final semantics = tester.ensureSemantics();
+      final session = testSession(title: "My Session", updatedAt: DateTime.now().millisecondsSinceEpoch);
+
+      await pumpTile(tester, tile(session: session, isActive: true));
+      // Nothing on screen says when this session last changed, so the row's
+      // spoken label has to — in full, not as the "now" glance mark, and after
+      // the state that took the slot from it.
+      expect(find.bySemanticsLabel(RegExp("Running\njust now")), findsOneWidget);
+
+      semantics.dispose();
+    });
   });
 
   group("the footer's details", () {
@@ -204,7 +298,7 @@ void main() {
       expect(find.text("Open"), findsOneWidget);
     });
 
-    testWidgets("yield to the timestamp under scaled-up accessibility text", (tester) async {
+    testWidgets("share the line without overflowing under scaled-up accessibility text", (tester) async {
       tester.platformDispatcher.textScaleFactorTestValue = 3.0;
       addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
       tester.view.physicalSize = const Size(390, 800);
@@ -228,12 +322,27 @@ void main() {
             ),
           );
 
+      // Three details on one line at 3x is the worst case the footer has to
+      // survive; each of them yields rather than the row overflowing.
       await pumpTile(tester, tile(session: session, isActive: true, awaitingInput: true));
 
       expect(tester.takeException(), isNull);
-      final tileRect = tester.getRect(find.byType(SessionTile));
-      expect(tester.getRect(find.text("just now")).right, lessThanOrEqualTo(tileRect.right));
     });
+  });
+
+  testWidgets("a title too long for its line fades out instead of ellipsizing", (tester) async {
+    await pumpTile(
+      tester,
+      tile(session: testSession(title: "A session title far too long to fit the width of a phone's list row")),
+    );
+
+    // The fade replaces the ellipsis: the glyphs run toward the trailing slot
+    // and dissolve there rather than stopping on a hard "…". The paragraph
+    // fades itself, so a row that has nothing to fade pays nothing for it.
+    final title = tester.widget<Text>(find.textContaining("A session title"));
+    expect(title.overflow, TextOverflow.fade);
+    expect(title.maxLines, 1);
+    expect(find.byType(ShaderMask), findsNothing);
   });
 
   group("row chrome", () {
@@ -287,7 +396,7 @@ void main() {
       expect(
         tester.getSemantics(find.descendant(of: find.byType(SessionTile), matching: find.byType(MergeSemantics))),
         matchesSemantics(
-          label: "My Session\nsesori/add-search\njust now",
+          label: "plugin-1 session\nMy Session\njust now\nsesori/add-search",
           isButton: true,
           isFocusable: true,
           hasTapAction: true,

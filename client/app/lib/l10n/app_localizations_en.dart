@@ -807,6 +807,11 @@ class AppLocalizationsEn extends AppLocalizations {
   String get sessionListNewActivity => 'New activity';
 
   @override
+  String sessionListHarness(String harness) {
+    return '$harness session';
+  }
+
+  @override
   String get sessionListRunningRetrying => 'Running (retrying)';
 
   @override
@@ -1222,6 +1227,24 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String timestampDaysAgo(int days) {
     return '${days}d ago';
+  }
+
+  @override
+  String get timestampCompactNow => 'now';
+
+  @override
+  String timestampCompactMinutes(int minutes) {
+    return '${minutes}m';
+  }
+
+  @override
+  String timestampCompactHours(int hours) {
+    return '${hours}h';
+  }
+
+  @override
+  String timestampCompactDays(int days) {
+    return '${days}d';
   }
 
   @override
