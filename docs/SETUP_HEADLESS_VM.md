@@ -24,18 +24,20 @@ apt install git -y
 
 ---
 
-## 4. Install GitHub CLI (`gh`)
+## 4. (Optional) Install GitHub CLI (`gh`)
+
+Sesori uses `gh` only to add GitHub pull request, CI, review, and mergeability
+status to sessions. Git worktrees and local file diffs use `git` directly and
+do not require `gh`, so you can skip this step if you do not need GitHub status
+sync.
+
+Follow the official [GitHub CLI installation instructions](https://cli.github.com/).
+
+To enable GitHub status sync, authenticate as the same OS user that will run
+`sesori-bridge` (`root` in the service below):
 
 ```bash
-(type -p wget >/dev/null || (sudo apt update && sudo apt install wget -y)) \
-	&& sudo mkdir -p -m 755 /etc/apt/keyrings \
-	&& out=$(mktemp) && wget -nv -O$out https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-	&& cat $out | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null \
-	&& sudo chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
-	&& sudo mkdir -p -m 755 /etc/apt/sources.list.d \
-	&& echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
-	&& sudo apt update \
-	&& sudo apt install gh -y
+gh auth login
 ```
 
 ---
@@ -164,6 +166,32 @@ User=root
 
 [Install]
 WantedBy=multi-user.target
+```
+
+### Optional: Token authentication for `gh`
+
+Skip this subsection if you ran `gh auth login` in step 4. It is needed only
+when you choose to authenticate GitHub CLI with `GH_TOKEN` or `GITHUB_TOKEN`
+instead of stored `gh` credentials.
+
+Systemd does not inherit variables exported in an SSH shell. Create a root-only
+environment file:
+
+```bash
+install -m 600 /dev/null /etc/sesori-bridge.env
+nano /etc/sesori-bridge.env
+```
+
+Add your token:
+
+```ini
+GH_TOKEN=replace-with-token
+```
+
+Then add this line under `[Service]` in `sesori-bridge.service`:
+
+```ini
+EnvironmentFile=/etc/sesori-bridge.env
 ```
 
 Enable + start:
