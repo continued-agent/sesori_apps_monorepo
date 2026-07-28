@@ -187,6 +187,38 @@ class GitCliApi {
     return commit.isEmpty ? null : commit;
   }
 
+  Future<void> fetchOriginBranch({
+    required String projectPath,
+    required String branchName,
+  }) async {
+    if (branchName.contains("*")) {
+      throw ArgumentError.value(branchName, "branchName", "must name one exact branch");
+    }
+    final arguments = [
+      "fetch",
+      "--no-write-fetch-head",
+      "--no-tags",
+      "--no-recurse-submodules",
+      "origin",
+      "+refs/heads/$branchName:refs/remotes/origin/$branchName",
+    ];
+    final result = await _processRunner.run(
+      "git",
+      arguments,
+      workingDirectory: projectPath,
+      timeout: const Duration(seconds: 30),
+      environment: const {"GIT_TERMINAL_PROMPT": "0"},
+    );
+    if (result.exitCode != 0) {
+      throw ProcessException(
+        "git",
+        arguments,
+        result.stderr.toString(),
+        result.exitCode,
+      );
+    }
+  }
+
   Future<ProcessResult> verifyRevision({
     required String projectPath,
     required String revision,

@@ -234,6 +234,62 @@ void main() {
       expect(processRunner.invocations.single.workingDirectory, equals("/repo/project"));
     });
 
+    test("fetchOriginBranch refreshes only the selected origin branch", () async {
+      processRunner.enqueue(result: _processResult(exitCode: 0));
+
+      await service.fetchOriginBranch(
+        projectPath: "/repo/project",
+        branchName: "main",
+      );
+
+      expect(processRunner.invocations, hasLength(1));
+      expect(
+        processRunner.invocations.single.arguments,
+        equals([
+          "fetch",
+          "--no-write-fetch-head",
+          "--no-tags",
+          "--no-recurse-submodules",
+          "origin",
+          "+refs/heads/main:refs/remotes/origin/main",
+        ]),
+      );
+      expect(processRunner.invocations.single.workingDirectory, equals("/repo/project"));
+      expect(processRunner.invocations.single.timeout, const Duration(seconds: 30));
+      expect(
+        processRunner.invocations.single.environment,
+        const {"GIT_TERMINAL_PROMPT": "0"},
+      );
+    });
+
+    test("fetchOriginBranch rejects a wildcard branch without running git", () async {
+      await expectLater(
+        () => service.fetchOriginBranch(
+          projectPath: "/repo/project",
+          branchName: "release/*",
+        ),
+        throwsArgumentError,
+      );
+
+      expect(processRunner.invocations, isEmpty);
+    });
+
+    test("fetchOriginBranch throws ProcessException when git fails", () async {
+      processRunner.enqueue(result: _processResult(exitCode: 1, stderr: "offline"));
+
+      await expectLater(
+        () => service.fetchOriginBranch(
+          projectPath: "/repo/project",
+          branchName: "main",
+        ),
+        throwsA(
+          isA<ProcessException>()
+              .having((error) => error.errorCode, "errorCode", 1)
+              .having((error) => error.message, "message", "offline"),
+        ),
+      );
+    });
+
     group("inspectWorktreeSafety", () {
       late Directory tempDir;
 
@@ -400,11 +456,15 @@ class _Invocation {
   final String command;
   final List<String> arguments;
   final String? workingDirectory;
+  final Duration timeout;
+  final Map<String, String>? environment;
 
   const _Invocation({
     required this.command,
     required this.arguments,
     required this.workingDirectory,
+    required this.timeout,
+    required this.environment,
   });
 }
 
@@ -444,6 +504,8 @@ class _FakeProcessRunner implements ProcessRunner {
         command: executable,
         arguments: List<String>.from(arguments),
         workingDirectory: workingDirectory,
+        timeout: timeout,
+        environment: environment,
       ),
     );
 
