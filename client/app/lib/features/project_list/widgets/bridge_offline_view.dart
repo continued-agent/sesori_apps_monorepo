@@ -2,19 +2,23 @@ part of "../project_list_screen.dart";
 
 /// Shown when the account has a bridge registered but none is connected — the
 /// user already completed setup, so instead of the install onboarding they are
-/// asked to reconnect. Mirrors the Figma "bridge disconnected" state: the
-/// connection graphic with a "Disconnected" status caption and the machine
-/// name of the bridge being reached, a "Reconnect" CTA, the always-visible
-/// "Start your bridge" command, a "Why is this needed?" explainer, and an
-/// expandable "Install commands" disclosure at the end for when the bridge
-/// needs to be (re)installed. The "Need help?" support menu ([_NeedHelpMenu])
-/// is not part of this scroll flow — it rides the scaffold's floating-action
-/// slot.
+/// asked to bring the bridge back up. Mirrors the Figma "bridge disconnected"
+/// state (node 2325:48309): the connection graphic over the machine name of
+/// the bridge being reached and a "Disconnected · <last seen>" status line,
+/// then the always-visible start-the-bridge command, a "Why is this needed?"
+/// explainer, and an expandable "Install commands" disclosure at the end for
+/// when the bridge needs to be (re)installed. The "Need help?" support menu
+/// ([_NeedHelpMenu]) is not part of this scroll flow — it rides the scaffold's
+/// floating-action slot.
+///
+/// There is no reconnect button: reconnecting is what the page already does on
+/// its own and on pull-to-refresh, so the design spends the space on the
+/// command the user actually has to run.
 ///
 /// A body, not a page: it is hosted in the project list's own page scroll (see
-/// [ProjectListScreen]) so the large title collapses into the bar as the
-/// expanded install commands scroll. Centred while it fits the viewport; the
-/// enclosing sliver grows past it once it doesn't.
+/// [ProjectListScreen]) so the expanded install commands scroll under a fixed
+/// bar. Anchored to the top of that page at the design's offset; the enclosing
+/// sliver grows past the viewport once the body outgrows it.
 class _BridgeOfflineView extends StatefulWidget {
   const _BridgeOfflineView({required this.bridges});
 
@@ -29,83 +33,54 @@ class _BridgeOfflineView extends StatefulWidget {
 }
 
 class _BridgeOfflineViewState extends State<_BridgeOfflineView> {
-  /// True while a [reconnectBridge] attempt is in flight, so the Reconnect
-  /// button can show its spinner. Reset in a `finally` guarded by `mounted`
-  /// since a successful reconnect emits a new state that unmounts this view.
-  bool _reconnecting = false;
-
   /// Whether the "Install commands" disclosure is expanded.
   bool _showInstallCommands = false;
-
-  Future<void> _reconnect() async {
-    if (_reconnecting) return;
-    setState(() => _reconnecting = true);
-    try {
-      await context.read<ProjectListCubit>().reconnectBridge();
-    } finally {
-      if (mounted) setState(() => _reconnecting = false);
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
     final loc = context.loc;
     final prego = context.prego;
+    final bridge = widget.bridges.firstOrNull;
+    final lastSeenAt = bridge?.lastSeenAt;
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: PregoSpacing.xl),
       child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          // Figma hangs the graphic 90px below the bar. Off the spacing scale,
+          // so it is written out. Anchored rather than centred: the composition
+          // reads from the top down, and centring would move the graphic as the
+          // install-commands disclosure grows the body beneath it.
+          const SizedBox(height: 90),
           const ExcludeSemantics(child: Center(child: ConnectionGraphic.connectionOff())),
           const SizedBox(height: PregoSpacing.lg),
-          // "Disconnected ⊗" status caption: the crossed circle reads as part
-          // of the caption, mirroring the check on the onboarding's connected
-          // status line. Merged so screen readers announce it as one unit.
-          MergeSemantics(
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Flexible(
-                  child: Text(
-                    loc.projectsBridgeOfflineDisconnected,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: prego.textTheme.textSm.regular.copyWith(color: prego.colors.textPrimary),
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsetsDirectional.only(start: PregoSpacing.xs),
-                  child: Icon(
-                    TablerRegular.circle_x,
-                    size: 14,
-                    color: prego.colors.textTertiary,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          if (widget.bridges.isNotEmpty) ...[
+          // The machine identity leads: the graphic already says "not
+          // connected", so the open question is which machine is unreachable.
+          // The status line answers the follow-up underneath it.
+          if (bridge != null) ...[
+            Center(child: _MachineNameRow(name: bridge.name)),
             const SizedBox(height: PregoSpacing.xxs),
-            Center(child: _MachineNameRow(name: widget.bridges.first.name)),
           ],
-          const SizedBox(height: PregoSpacing.x5l),
-          PregoButtonsSolid(
-            label: loc.projectsBridgeOfflineReconnect,
-            hierarchy: PregoButtonsSolidHierarchy.primaryAlt,
-            size: PregoButtonsSolidSize.xl,
-            leadingIcon: TablerRegular.rotate_clockwise,
-            fullWidth: true,
-            isLoading: _reconnecting,
-            onPressed: _reconnect,
+          Text(
+            lastSeenAt == null
+                ? loc.projectsBridgeOfflineDisconnected
+                // How long the bridge has been gone separates "I just closed
+                // the laptop lid" from "this has been down for days". Refreshed
+                // by the screen's minute ticker.
+                : loc.projectsBridgeOfflineDisconnectedSince(
+                    context.formatTimestamp(lastSeenAt.millisecondsSinceEpoch),
+                  ),
+            textAlign: TextAlign.center,
+            style: prego.textTheme.textXs.regular.copyWith(color: prego.colors.textSecondary),
           ),
+          const SizedBox(height: PregoSpacing.x5l),
           // Always visible: the bridge is already installed here, so the common
           // recovery is to (re)start it rather than reinstall.
-          const SizedBox(height: PregoSpacing.xl),
           _InfoLabel(
             title: loc.projectsBridgeOfflineStartBridge,
             info: loc.projectsBridgeOfflineStartBridgeInfo,
+            centered: true,
           ),
           const SizedBox(height: PregoSpacing.md),
           const _CommandBoxFrame(
@@ -154,9 +129,8 @@ class _BridgeOfflineViewState extends State<_BridgeOfflineView> {
                   SizedBox(height: PregoSpacing.lg),
                   _InstallCommandBoxes(surface: OnboardingSurface.bridgeOffline),
                   // Bottom breathing room so the last install box can be
-                  // scrolled clear of the "Need help?" button pinned in the
-                  // bottom-right corner. Inside the disclosure so the collapsed
-                  // body keeps its exact vertical centring.
+                  // scrolled clear of the "Need help?" button floating at the
+                  // bottom of the page.
                   SizedBox(height: PregoSpacing.x6l),
                 ],
               ),
@@ -168,11 +142,13 @@ class _BridgeOfflineViewState extends State<_BridgeOfflineView> {
   }
 }
 
-/// The machine identity row under the "Disconnected" caption: a laptop glyph
-/// and the machine name of the bridge being reached (the hostname the bridge
-/// registered with the auth server). A static, non-interactive label — the
-/// account runs a single bridge at a time, so there is nothing to act on
-/// here.
+/// The machine identity row naming the bridge being reached (the hostname the
+/// bridge registered with the auth server), shown beside a laptop glyph. A
+/// static, non-interactive label — the account runs a single bridge at a time,
+/// so there is nothing to act on here.
+///
+/// Reads in `text-primary`: it is the headline of the offline body, with the
+/// status line beneath it as the quiet second read.
 class _MachineNameRow extends StatelessWidget {
   const _MachineNameRow({required this.name});
 
@@ -182,6 +158,7 @@ class _MachineNameRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final prego = context.prego;
+    final color = prego.colors.textPrimary;
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -189,7 +166,7 @@ class _MachineNameRow extends StatelessWidget {
           width: 20,
           height: 20,
           child: Center(
-            child: Icon(TablerRegular.device_laptop, size: 12, color: prego.colors.textSecondary),
+            child: Icon(TablerRegular.device_laptop, size: 12, color: color),
           ),
         ),
         Flexible(
@@ -197,7 +174,7 @@ class _MachineNameRow extends StatelessWidget {
             name,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: prego.textTheme.textSm.regular.copyWith(color: prego.colors.textSecondary),
+            style: prego.textTheme.textSm.regular.copyWith(color: color),
           ),
         ),
       ],
