@@ -354,6 +354,7 @@ class SessionDetailCubit extends Cubit<SessionDetailState> {
               assistantAgentModel: assistantAgentModel,
               children: refreshedChildSessions,
               childStatuses: childStatuses,
+              isArchived: snapshot.isArchived,
               availableAgents: availableAgents,
               availableProviders: availableProviders,
               availableCommands: snapshot.commands,
@@ -695,9 +696,15 @@ class SessionDetailCubit extends Cubit<SessionDetailState> {
   void _onSessionUpdated(Session session) {
     final current = state;
     if (current is! SessionDetailLoaded) return;
+    final sessionTime = session.time;
 
     if (isClosed) return;
-    emit(current.copyWith(sessionTitle: session.title));
+    emit(
+      current.copyWith(
+        sessionTitle: session.title,
+        isArchived: sessionTime == null ? current.isArchived : sessionTime.archived != null,
+      ),
+    );
   }
 
   void _onPromptDefaultsChanged(SessionPromptDefaults promptDefaults) {
@@ -1454,6 +1461,7 @@ class SessionDetailCubit extends Cubit<SessionDetailState> {
       children: childSessions,
       childStatuses: childStatuses,
       isRootSession: snapshot.isRootSession,
+      isArchived: snapshot.isArchived,
       queuedMessages: _promptQueue.items,
       availableAgents: agents,
       availableProviders: providers,

@@ -144,6 +144,7 @@ void main() {
             canonicalSessionTitle: null,
             promptDefaults: null,
             isRootSession: true,
+            isArchived: false,
           ),
           isBridgeConnected: true,
         ),
@@ -207,6 +208,7 @@ void main() {
             canonicalSessionTitle: null,
             promptDefaults: null,
             isRootSession: true,
+            isArchived: false,
           ),
           isBridgeConnected: true,
         ),
@@ -251,6 +253,7 @@ void main() {
             canonicalSessionTitle: null,
             promptDefaults: null,
             isRootSession: true,
+            isArchived: false,
           ),
           isBridgeConnected: true,
         );
@@ -277,6 +280,7 @@ void main() {
             canonicalSessionTitle: null,
             promptDefaults: null,
             isRootSession: true,
+            isArchived: false,
           ),
           isBridgeConnected: true,
         ),
@@ -352,6 +356,7 @@ void main() {
             canonicalSessionTitle: null,
             promptDefaults: null,
             isRootSession: true,
+            isArchived: false,
           ),
           isBridgeConnected: true,
         ),
@@ -422,6 +427,7 @@ void main() {
             canonicalSessionTitle: null,
             promptDefaults: null,
             isRootSession: true,
+            isArchived: false,
           ),
           isBridgeConnected: true,
         ),
@@ -433,7 +439,7 @@ void main() {
       expect(state.messages, isEmpty);
     });
 
-    test("processes events immediately when already loaded", () async {
+    test("processes events immediately and updates archive state", () async {
       final mockLoadService = MockSessionDetailLoadService();
 
       when(
@@ -456,6 +462,7 @@ void main() {
             canonicalSessionTitle: null,
             promptDefaults: null,
             isRootSession: true,
+            isArchived: false,
           ),
           isBridgeConnected: true,
         ),
@@ -480,6 +487,23 @@ void main() {
       final state = cubit.state as SessionDetailLoaded;
       expect(state.messages.length, 1);
       expect(state.messages.first.info.id, "msg-1");
+
+      sessionEvents.add(
+        SesoriSessionUpdated(
+          info: testSession(
+            id: _sessionId,
+            archivedAt: DateTime.utc(2026),
+          ),
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      expect((cubit.state as SessionDetailLoaded).isArchived, isTrue);
+
+      sessionEvents.add(SesoriSessionUpdated(info: testSession(id: _sessionId)));
+      await Future<void>.delayed(Duration.zero);
+
+      expect((cubit.state as SessionDetailLoaded).isArchived, isFalse);
     });
     test("does not buffer irrelevant global events (PTY, file watcher, etc.)", () async {
       final mockLoadService = MockSessionDetailLoadService();
@@ -519,6 +543,7 @@ void main() {
             canonicalSessionTitle: null,
             promptDefaults: null,
             isRootSession: true,
+            isArchived: false,
           ),
           isBridgeConnected: true,
         ),

@@ -167,6 +167,40 @@ class WorktreeRepository {
     }
   }
 
+  Future<String?> resolveCleanHeadCommit({
+    required String projectPath,
+  }) async {
+    try {
+      final isGitRoot = await _gitApi.isGitInitialized(projectPath: projectPath);
+      if (!isGitRoot && !await _gitApi.isInsideGitWorkTree(projectPath: projectPath)) {
+        return null;
+      }
+
+      final statusResult = await _gitApi.readWorkingTreeStatus(projectPath: projectPath);
+      if (statusResult.exitCode != 0) {
+        throw StateError("git status failed with exit ${statusResult.exitCode}");
+      }
+      if (statusResult.stdout.toString().trim().isNotEmpty) {
+        return null;
+      }
+
+      final headResult = await _gitApi.readHeadCommit(projectPath: projectPath);
+      if (headResult.exitCode == 1) return null;
+      if (headResult.exitCode != 0) {
+        throw StateError("git rev-parse HEAD failed with exit ${headResult.exitCode}");
+      }
+      final commit = headResult.stdout.toString().trim();
+      if (commit.isEmpty) {
+        throw StateError("git rev-parse HEAD returned an empty commit");
+      }
+
+      return commit;
+    } on Object catch (error, stackTrace) {
+      Log.w("[WorktreeRepository] failed to capture Git snapshot for $projectPath", error, stackTrace);
+      return null;
+    }
+  }
+
   Future<WorktreeSafetyResult> checkWorktreeSafety({
     required String worktreePath,
     required String expectedBranch,

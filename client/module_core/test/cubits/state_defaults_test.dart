@@ -18,6 +18,7 @@ void main() {
       children: [],
       childStatuses: {},
       isRootSession: true,
+      isArchived: false,
       queuedMessages: [],
       availableAgents: [],
       availableProviders: [],

@@ -171,6 +171,14 @@ class WorktreeService {
     );
   }
 
+  Future<String?> resolveCleanHeadCommit({
+    required String projectId,
+  }) async {
+    return _worktreeRepository.resolveCleanHeadCommit(
+      projectPath: await _worktreeRepository.resolveProjectPath(projectId: projectId),
+    );
+  }
+
   Future<WorktreeSafetyResult> checkWorktreeSafety({
     required String worktreePath,
     required String expectedBranch,

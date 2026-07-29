@@ -159,6 +159,30 @@ void main() {
       expect((plugin.lastCreateParts!.first as PluginPromptPartText).text, contains("SYSTEM CONTEXT"));
     });
 
+    test("stores a clean HEAD snapshot for an in-place session", () async {
+      worktreeService.cleanHeadCommit = "abc123";
+
+      final created = await service.createSession(
+        request: const CreateSessionRequest(
+          projectId: "/repo",
+          pluginId: "fake",
+          dedicatedWorktree: false,
+          parts: [],
+          variant: null,
+          agent: null,
+          model: null,
+          command: null,
+        ),
+      );
+
+      final stored = await db.sessionDao.getSession(sessionId: created.id);
+      expect(stored?.worktreePath, isNull);
+      expect(stored?.branchName, isNull);
+      expect(stored?.baseBranch, isNull);
+      expect(stored?.baseCommit, "abc123");
+      expect(worktreeService.resolveCalls, 1);
+    });
+
     test("allocates around a cross-plugin backend-id collision without changing the retained binding", () async {
       await db.projectsDao.recordOpenedProject(
         projectId: "/retained",
@@ -235,6 +259,7 @@ class _FakeWorktreeService extends WorktreeService {
   int prepareCalls = 0;
   int resolveCalls = 0;
   WorktreeResult prepareResult = WorktreeFallback(originalPath: "/repo", reason: "fallback");
+  String? cleanHeadCommit;
 
   _FakeWorktreeService({required super.worktreeRepository});
 
@@ -249,11 +274,11 @@ class _FakeWorktreeService extends WorktreeService {
   }
 
   @override
-  Future<({String baseBranch, String baseCommit, String startPoint})?> resolveBaseBranchAndCommit({
+  Future<String?> resolveCleanHeadCommit({
     required String projectId,
   }) async {
     resolveCalls++;
-    return null;
+    return cleanHeadCommit;
   }
 }
 

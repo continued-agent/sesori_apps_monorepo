@@ -10,6 +10,100 @@ import "package:test/test.dart";
 import "../../helpers/test_database.dart";
 
 void main() {
+  group("WorktreeRepository.resolveCleanHeadCommit", () {
+    late AppDatabase db;
+    late _FakeProcessRunner processRunner;
+    late _FakeBridgePlugin plugin;
+
+    setUp(() {
+      db = createTestDatabase();
+      processRunner = _FakeProcessRunner();
+      plugin = _FakeBridgePlugin();
+    });
+
+    tearDown(() async {
+      await db.close();
+    });
+
+    WorktreeRepository repository({required bool isGitRepository}) => singlePluginWorktreeRepository(
+      projectsDao: db.projectsDao,
+      sessionDao: db.sessionDao,
+      gitApi: GitCliApi(
+        processRunner: processRunner,
+        gitPathExists: ({required String gitPath}) => isGitRepository,
+      ),
+      plugin: plugin,
+    );
+
+    test("captures HEAD when the working tree is clean", () async {
+      processRunner.enqueue(result: ProcessResult(0, 0, "", ""));
+      processRunner.enqueue(result: ProcessResult(0, 0, "abc123\n", ""));
+
+      final result = await repository(isGitRepository: true).resolveCleanHeadCommit(
+        projectPath: "/repo",
+      );
+
+      expect(result, "abc123");
+      expect(processRunner.invocations[0].arguments, [
+        "status",
+        "--porcelain",
+        "--untracked-files=normal",
+        "--",
+        ".",
+      ]);
+      expect(processRunner.invocations[1].arguments, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]);
+    });
+
+    test("captures Git state when the project is nested inside a worktree", () async {
+      processRunner.enqueue(result: ProcessResult(0, 0, "true\n", ""));
+      processRunner.enqueue(result: ProcessResult(0, 0, "", ""));
+      processRunner.enqueue(result: ProcessResult(0, 0, "abc123\n", ""));
+
+      final result = await repository(isGitRepository: false).resolveCleanHeadCommit(
+        projectPath: "/repo/packages/nested",
+      );
+
+      expect(result, "abc123");
+      expect(processRunner.invocations[0].arguments, ["rev-parse", "--is-inside-work-tree"]);
+    });
+
+    test("returns no snapshot when the project is outside a Git worktree", () async {
+      processRunner.enqueue(result: ProcessResult(0, 128, "", "fatal: not a git repository"));
+
+      final result = await repository(isGitRepository: false).resolveCleanHeadCommit(
+        projectPath: "/plain-directory",
+      );
+
+      expect(result, isNull);
+      expect(processRunner.invocations.single.arguments, ["rev-parse", "--is-inside-work-tree"]);
+    });
+
+    test("returns no snapshot when the working tree is already dirty", () async {
+      processRunner.enqueue(result: ProcessResult(0, 0, " M existing.dart\n", ""));
+
+      final result = await repository(isGitRepository: true).resolveCleanHeadCommit(
+        projectPath: "/repo",
+      );
+
+      expect(result, isNull);
+      expect(processRunner.invocations.single.arguments, [
+        "status",
+        "--porcelain",
+        "--untracked-files=normal",
+        "--",
+        ".",
+      ]);
+    });
+
+    test("returns no snapshot when Git snapshot capture fails", () async {
+      final result = await repository(isGitRepository: true).resolveCleanHeadCommit(
+        projectPath: "/repo",
+      );
+
+      expect(result, isNull);
+    });
+  });
+
   group("WorktreeRepository.removeWorktree", () {
     late AppDatabase db;
     late _FakeProcessRunner processRunner;

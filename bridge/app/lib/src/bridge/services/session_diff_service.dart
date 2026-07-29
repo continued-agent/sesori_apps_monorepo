@@ -61,26 +61,45 @@ class SessionDiffService {
     if (session == null) {
       throw SessionDiffSessionNotFoundException();
     }
+    if (session.archivedAt != null) return const [];
 
-    final worktreePath = session.worktreePath;
-    final baseBranch = session.baseBranch;
-    if (worktreePath == null || baseBranch == null) return const [];
-    if (!_filesystemRepository.directoryExists(path: worktreePath)) return const [];
-    if (baseBranch.isEmpty) {
-      throw const BaseBranchUnreachableException(message: "invalid base branch format: ''");
+    final String worktreePath;
+    final String revision;
+    final SessionDiffComparisonMode comparisonMode;
+    if (session.isDedicated) {
+      final dedicatedWorktreePath = session.worktreePath;
+      final baseBranch = session.baseBranch;
+      if (dedicatedWorktreePath == null || baseBranch == null) return const [];
+      if (baseBranch.isEmpty) {
+        throw const BaseBranchUnreachableException(message: "invalid base branch format: ''");
+      }
+      if (!_filesystemRepository.directoryExists(path: dedicatedWorktreePath)) return const [];
+      worktreePath = dedicatedWorktreePath;
+      revision = baseBranch;
+      comparisonMode = SessionDiffComparisonMode.mergeBase;
+    } else {
+      // Only the new null-branch shape is an exact session-start snapshot.
+      final startCommit = session.baseBranch == null ? session.baseCommit?.trim() : null;
+      if (startCommit == null || startCommit.isEmpty) return const [];
+      final projectPath = await _sessionRepository.getProjectPath(projectId: session.projectId);
+      if (projectPath == null) return const [];
+      if (!_filesystemRepository.directoryExists(path: projectPath)) return const [];
+      worktreePath = projectPath;
+      revision = startCommit;
+      comparisonMode = SessionDiffComparisonMode.exactRevision;
     }
-
     final queryResult = await _sessionDiffRepository.query(
       worktreePath: worktreePath,
-      baseBranch: baseBranch,
+      revision: revision,
+      comparisonMode: comparisonMode,
     );
     final snapshot = switch (queryResult) {
       SessionDiffQuerySuccess() => queryResult,
-      SessionDiffBaseBranchUnreachable() => throw BaseBranchUnreachableException(
-        message: "base branch '$baseBranch' is not reachable",
+      SessionDiffBaseUnreachable() => throw BaseBranchUnreachableException(
+        message: "diff base '$revision' is not reachable",
       ),
       SessionDiffNoCommonAncestor() => throw BaseBranchUnreachableException(
-        message: "no common ancestor between '$baseBranch' and HEAD",
+        message: "no common ancestor between '$revision' and HEAD",
       ),
       SessionDiffQueryFailure(:final message) => throw GitDiffQueryException(message: message),
     };
@@ -100,7 +119,7 @@ class SessionDiffService {
 
       final beforeResult = await _readBefore(
         worktreePath: worktreePath,
-        revision: snapshot.mergeBase,
+        revision: snapshot.baseRevision,
         entry: entry,
       );
       final afterResult = _readAfter(

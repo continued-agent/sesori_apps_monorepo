@@ -187,6 +187,20 @@ class GitCliApi {
     return commit.isEmpty ? null : commit;
   }
 
+  Future<ProcessResult> readHeadCommit({required String projectPath}) {
+    return runGit(
+      projectPath: projectPath,
+      arguments: const ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"],
+    );
+  }
+
+  Future<ProcessResult> readWorkingTreeStatus({required String projectPath}) {
+    return runGit(
+      projectPath: projectPath,
+      arguments: const ["status", "--porcelain", "--untracked-files=normal", "--", "."],
+    );
+  }
+
   Future<void> fetchOriginBranch({
     required String projectPath,
     required String branchName,
@@ -250,9 +264,12 @@ class GitCliApi {
         "--no-ext-diff",
         "--no-color",
         "--no-renames",
+        "--relative",
         "--name-status",
         "-z",
         revision,
+        "--",
+        ".",
       ],
     );
   }
@@ -268,9 +285,12 @@ class GitCliApi {
         "--no-ext-diff",
         "--no-color",
         "--no-renames",
+        "--relative",
         "--numstat",
         "-z",
         revision,
+        "--",
+        ".",
       ],
     );
   }
@@ -278,7 +298,7 @@ class GitCliApi {
   Future<ProcessResult> listUntrackedFiles({required String projectPath}) {
     return runGit(
       projectPath: projectPath,
-      arguments: const ["ls-files", "--others", "--exclude-standard", "-z"],
+      arguments: const ["ls-files", "--others", "--exclude-standard", "-z", "--", "."],
     );
   }
 
@@ -289,7 +309,7 @@ class GitCliApi {
   }) {
     return runGit(
       projectPath: projectPath,
-      arguments: ["cat-file", "-s", "$revision:$file"],
+      arguments: ["cat-file", "-s", "$revision:./$file"],
     );
   }
 
@@ -300,7 +320,7 @@ class GitCliApi {
   }) {
     return runGit(
       projectPath: projectPath,
-      arguments: ["show", "$revision:$file"],
+      arguments: ["show", "$revision:./$file"],
     );
   }
 
@@ -309,7 +329,7 @@ class GitCliApi {
     required String baseBranch,
     required String localCommit,
   }) async {
-    final originRef = "origin/$baseBranch";
+    final originRef = "refs/remotes/origin/$baseBranch";
     final originResult = await runGit(
       projectPath: projectPath,
       arguments: ["rev-parse", originRef],

@@ -4,18 +4,18 @@ import "mappers/git_diff_output_mapper.dart";
 sealed class SessionDiffQueryResult {}
 
 class SessionDiffQuerySuccess extends SessionDiffQueryResult {
-  final String mergeBase;
+  final String baseRevision;
   final List<SessionDiffEntry> entries;
   final Map<String, SessionDiffLineCounts> lineCountsByFile;
 
   SessionDiffQuerySuccess({
-    required this.mergeBase,
+    required this.baseRevision,
     required this.entries,
     required this.lineCountsByFile,
   });
 }
 
-class SessionDiffBaseBranchUnreachable extends SessionDiffQueryResult {}
+class SessionDiffBaseUnreachable extends SessionDiffQueryResult {}
 
 class SessionDiffNoCommonAncestor extends SessionDiffQueryResult {}
 
@@ -24,6 +24,8 @@ class SessionDiffQueryFailure extends SessionDiffQueryResult {
 
   SessionDiffQueryFailure({required this.message});
 }
+
+enum SessionDiffComparisonMode { exactRevision, mergeBase }
 
 sealed class SessionDiffRevisionFileReadResult {}
 
@@ -51,37 +53,45 @@ class SessionDiffRepository {
 
   Future<SessionDiffQueryResult> query({
     required String worktreePath,
-    required String baseBranch,
+    required String revision,
+    required SessionDiffComparisonMode comparisonMode,
   }) async {
     final verifyResult = await _gitCliApi.verifyRevision(
       projectPath: worktreePath,
-      revision: baseBranch,
+      revision: revision,
     );
     if (verifyResult.exitCode != 0) {
-      return SessionDiffBaseBranchUnreachable();
+      return SessionDiffBaseUnreachable();
     }
 
-    final mergeBaseResult = await _gitCliApi.findMergeBase(
-      projectPath: worktreePath,
-      baseRevision: baseBranch,
-    );
-    if (mergeBaseResult.exitCode == 1) {
-      return SessionDiffNoCommonAncestor();
-    }
-    if (mergeBaseResult.exitCode != 0) {
-      final stderr = _outputMapper.decodeOutput(output: mergeBaseResult.stderr).trim();
-      return SessionDiffQueryFailure(
-        message: "git merge-base failed (exit ${mergeBaseResult.exitCode}): $stderr",
-      );
-    }
-    final mergeBase = _outputMapper.parseSingleSha(output: mergeBaseResult.stdout);
-    if (mergeBase == null) {
-      return SessionDiffQueryFailure(message: "git merge-base returned unexpected output");
+    late final String baseRevision;
+    switch (comparisonMode) {
+      case SessionDiffComparisonMode.exactRevision:
+        baseRevision = revision;
+      case SessionDiffComparisonMode.mergeBase:
+        final mergeBaseResult = await _gitCliApi.findMergeBase(
+          projectPath: worktreePath,
+          baseRevision: revision,
+        );
+        if (mergeBaseResult.exitCode == 1) {
+          return SessionDiffNoCommonAncestor();
+        }
+        if (mergeBaseResult.exitCode != 0) {
+          final stderr = _outputMapper.decodeOutput(output: mergeBaseResult.stderr).trim();
+          return SessionDiffQueryFailure(
+            message: "git merge-base failed (exit ${mergeBaseResult.exitCode}): $stderr",
+          );
+        }
+        final mergeBase = _outputMapper.parseSingleSha(output: mergeBaseResult.stdout);
+        if (mergeBase == null) {
+          return SessionDiffQueryFailure(message: "git merge-base returned unexpected output");
+        }
+        baseRevision = mergeBase;
     }
 
     final nameStatusResult = await _gitCliApi.diffNameStatus(
       projectPath: worktreePath,
-      revision: mergeBase,
+      revision: baseRevision,
     );
     if (nameStatusResult.exitCode != 0) {
       return SessionDiffQueryFailure(message: "git diff --name-status failed");
@@ -89,7 +99,7 @@ class SessionDiffRepository {
 
     final numstatResult = await _gitCliApi.diffNumstat(
       projectPath: worktreePath,
-      revision: mergeBase,
+      revision: baseRevision,
     );
     if (numstatResult.exitCode != 0) {
       return SessionDiffQueryFailure(message: "git diff --numstat failed");
@@ -101,7 +111,7 @@ class SessionDiffRepository {
     }
 
     return SessionDiffQuerySuccess(
-      mergeBase: mergeBase,
+      baseRevision: baseRevision,
       entries: _outputMapper.mergeTrackedAndUntrackedEntries(
         trackedEntries: _outputMapper.parseNameStatus(output: nameStatusResult.stdout),
         untrackedPaths: _outputMapper.parseUntrackedPaths(output: untrackedResult.stdout),

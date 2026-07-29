@@ -252,12 +252,14 @@ class SessionCreationService {
     if (dedicatedWorktree) {
       return (worktreePath: null, branchName: null, baseBranch: null, baseCommit: null);
     }
-    final baseBranchAndCommit = await _worktreeService.resolveBaseBranchAndCommit(projectId: projectId);
+    final startCommit = await _worktreeService.resolveCleanHeadCommit(projectId: projectId);
+    // A null branch distinguishes exact start snapshots from released
+    // in-place rows, which stored the project base as a branch/commit pair.
     return (
       worktreePath: null,
       branchName: null,
-      baseBranch: baseBranchAndCommit?.baseBranch,
-      baseCommit: baseBranchAndCommit?.baseCommit,
+      baseBranch: null,
+      baseCommit: startCommit,
     );
   }
 

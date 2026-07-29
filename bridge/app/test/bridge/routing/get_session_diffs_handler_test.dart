@@ -229,7 +229,7 @@ void main() {
       );
 
       expect(response.status, equals(422));
-      expect(response.body, equals("base branch 'main' is not reachable"));
+      expect(response.body, equals("diff base 'main' is not reachable"));
     });
 
     test("returns 422 when merge-base finds no common ancestor", () async {
