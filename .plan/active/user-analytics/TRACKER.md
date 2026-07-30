@@ -87,7 +87,8 @@
   clients; one shared secret serves web/export/suppression runtimes, while a
   deletion-only legacy SHA-256 value remains restricted to privacy targets for
   pre-migration Firebase `user_id` deletion.
-- [x] Decompose Step 3.C's lifecycle implementation in supplemental PR #619:
+- [x] Decompose Step 3.C's lifecycle implementation in supplemental PR #619,
+  merged as `b65cb974` on 2026-07-30:
   keep `ProductAnalyticsService` as the delivery facade, move preference and
   account lifecycle into an injected collaborator with one disposal owner, and
   replace coordinated nullable fields with explicit snapshots/runtime states.
@@ -119,8 +120,8 @@
 
 The total remains fixed at five rollout steps. Titles retain this slug and step
 count across both repositories; Step 3 is delivered as stacked PR substeps
-3.A-3.D. The former combined apps PR #610 is frozen and is being superseded so
-each review stays near 1,500 added lines.
+3.A-3.D. The former combined apps PR #610 was frozen and closed as superseded by
+PRs #611-#614 so each review stays near 1,500 added lines.
 
 | Step | Repository | Required title | Status | Depends on |
 | --- | --- | --- | --- | --- |
@@ -128,8 +129,8 @@ each review stays near 1,500 added lines.
 | 2/5 | `sesori_auth_server` | `[user-analytics] Enforce analytics preference and add export [step 2/5]` | PR #49 merged as `043ee9f` and deployed 2026-07-29; production health is `ok`, required-field enforcement is live, and the web HMAC secret is configured; export/suppression jobs remain unprovisioned and disabled | Step 1 deployed and repeated backfill validation at zero missing |
 | 3.A/5 | apps monorepo | `[user-analytics] Add client analytics contracts and delivery [step 3.A/5]` | PR #611 merged as `3a181ee3` on 2026-07-30; frozen PR #610 remains superseded | Step 2 deployed |
 | 3.B/5 | apps monorepo | `[user-analytics] Add durable analytics preference sync [step 3.B/5]` | PR #612 merged as `a792481b` on 2026-07-30 | Step 3.A |
-| 3.C/5 | apps monorepo | `[user-analytics] Add account-linked analytics lifecycle [step 3.C/5]` | PR #613 open at `6b80b7bf`; supplemental lifecycle decomposition PR #619 targets its branch and has passed local/downstream verification | Step 3.B |
-| 3.D/5 | apps monorepo | `[user-analytics] Integrate analytics settings and routing [step 3.D/5]` | PR #614 open and approved at `47a7fcb9`; propagate the Step 3.C refactor after #619 merges | Step 3.C |
+| 3.C/5 | apps monorepo | `[user-analytics] Add account-linked analytics lifecycle [step 3.C/5]` | PR #613 merged as `53e9453f` on 2026-07-30, including supplemental lifecycle decomposition PR #619 | Step 3.B |
+| 3.D/5 | apps monorepo | `[user-analytics] Integrate analytics settings and routing [step 3.D/5]` | PR #614 open and approved; latest `main` merged after Step 3.C with propagated core/app/desktop verification passing | Step 3.C |
 | 4/5 | apps monorepo | `[user-analytics] Instrument activation and engagement outcomes [step 4/5]` | Not started | Step 3.D released |
 | 5/5 | apps monorepo + cloud | `[user-analytics] Add BigQuery metrics and Looker dashboards [step 5/5]` | Not started | Steps 2 and 4, controlled Firebase export, split auth-private/privacy-private/control IAM |
 
