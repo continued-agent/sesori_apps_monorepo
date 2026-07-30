@@ -2,11 +2,11 @@
 
 ## Current State
 
-- **Implementation base:** `origin/main` at `27d46e71`
-- **Series state:** Steps 1/6 through 4.C/6 are merged; oversized PR #620 is
-  frozen as a draft and replaced by the Step 4.D/6 through 4.F/6 sequence
-- **Current step:** Step 4.D/6 — scoped capture/persistence repository
-- **Next action:** monitor and merge PR #626
+- **Implementation base:** `origin/main` at `37da883a`
+- **Series state:** Steps 1/6 through 4.D/6 are merged; oversized PR #620 is
+  frozen as a draft and replaced by the Step 4.E/6 through 4.F/6 sequence
+- **Current step:** Step 4.E/6 — cache policy and intent-aware coalescing
+- **Next action:** monitor and merge PR #627
 
 ## Delivery
 
@@ -18,8 +18,8 @@
 | [x] | Step 4.A/6 — wire contracts and runtime seams | `multi-plugin-release-prep-bridge-contracts` | PR #623 merged |
 | [x] | Step 4.B/6 — scoped cache schema/runtime database | `multi-plugin-release-prep-cache-schema` | PR #624 merged |
 | [x] | Step 4.C/6 — migration and DAO verification | `multi-plugin-release-prep-cache-verification` | PR #625 merged |
-| [ ] | Step 4.D/6 — capture/persistence repository | `multi-plugin-release-prep-cache-repository` | PR #626 ready |
-| [ ] | Step 4.E/6 — cache policy/coalescing service | `multi-plugin-release-prep-cache-service` | Blocked on 4.D |
+| [x] | Step 4.D/6 — capture/persistence repository | `multi-plugin-release-prep-cache-repository` | PR #626 merged |
+| [ ] | Step 4.E/6 — cache policy/coalescing service | `multi-plugin-release-prep-cache-service` | PR #627 ready |
 | [ ] | Step 4.F/6 — route, listeners, and lifecycle wiring | `multi-plugin-release-prep-cache-route` | Blocked on 4.E |
 | [ ] | Step 5/6 — cached New Session client flow | `multi-plugin-release-prep-client-options` | Blocked on Step 4 merge |
 | [ ] | Step 6/6 — consolidated Harnesses settings | `multi-plugin-release-prep-harness-settings` | Blocked on Step 5 merge |
@@ -160,4 +160,21 @@
   payload-independent, wraps corrupted persisted enum values while preserving
   database failures, and uses typed JSON test helpers. All 62 repository/runtime
   tests and bridge-app fatal analysis passed with `git diff --check`. Aristotle
-  approved the implementation architecture without findings.
+  approved the implementation architecture without findings. PR #626 merged to
+  `main` as `37da883a`.
+- Step 4.E/6 preparation (2026-07-30): added Layer-3 scope resolution,
+  path/retention invalidation, completeness replacement, last-good failure
+  handling, one-retry revision CAS, stale-generation no-op, and intent-aware
+  forced-tail coalescing. Review follow-up made invalidation revision-fenced,
+  revalidated authoritative paths before deletion and commit, queued reuse after
+  stale-generation work, kept malformed-cache logs payload-independent, and
+  named test-helper parameters. A second review round revalidates retained data
+  after capture failure and revision-fences malformed-row recovery. A third
+  review round rechecks project paths before cache-only responses, revalidates
+  retained data after partial capture, preserves plugin-scoped cache across
+  project moves, avoids unfenced deletion without an observed revision, and
+  retains privacy-safe typed causes for caught explicit failures. All 37 focused
+  persistence/repository/service tests and bridge-app fatal analysis passed with
+  `git diff --check`. Aristotle's second/final review approved the preceding
+  revised architecture without findings; the later feedback fixes were not
+  re-reviewed because implementation review is capped at two passes.
