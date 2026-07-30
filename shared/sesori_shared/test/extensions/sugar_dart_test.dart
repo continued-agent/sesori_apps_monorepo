@@ -3,6 +3,23 @@ import "package:sesori_shared/sesori_shared.dart";
 import "package:test/test.dart";
 
 void main() {
+  group("jsonCastMap", () {
+    test("casts a decoded JSON map", () {
+      final result = jsonCastMap(<String, dynamic>{"key": "value"});
+
+      expect(result, {"key": "value"});
+    });
+
+    test("rejects decoded non-map values", () {
+      final value = <int>[1, 2, 3];
+
+      expect(
+        () => jsonCastMap(value),
+        throwsA(isA<FormatException>().having((error) => error.source, "source", same(value))),
+      );
+    });
+  });
+
   group("jsonDecodeMap", () {
     test("decodes valid JSON map", () {
       const json = '{"key": "value", "number": 42}';

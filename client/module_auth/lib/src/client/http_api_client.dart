@@ -186,8 +186,17 @@ class HttpApiClient implements SafeApiClient {
           // ignore: no_slop_linter/prefer_specific_type, json decoding
           final json = jsonDecode(response.body);
           return ApiResponse.success(fromJson(json));
-        } catch (e) {
-          developer.log("Failed to parse multipart response JSON", name: "sesori_auth", error: e, level: 1000);
+        } on Object catch (error, stackTrace) {
+          developer.log(
+            "Failed to parse multipart response JSON",
+            name: "sesori_auth",
+            error: _JsonResponseParsingException(
+              message: "Invalid multipart response JSON",
+              innerError: error,
+            ),
+            stackTrace: stackTrace,
+            level: 1000,
+          );
           return ApiResponse.error(ApiError.jsonParsing(response.body));
         }
       } else {
@@ -256,8 +265,17 @@ class HttpApiClient implements SafeApiClient {
           // ignore: no_slop_linter/prefer_specific_type, json decoding
           final json = jsonDecode(response.body);
           return ApiResponse.success(fromJson(json));
-        } catch (e) {
-          developer.log("Failed to parse response JSON", name: "sesori_auth", error: e, level: 1000);
+        } on Object catch (error, stackTrace) {
+          developer.log(
+            "Failed to parse response JSON",
+            name: "sesori_auth",
+            error: _JsonResponseParsingException(
+              message: "Invalid response JSON",
+              innerError: error,
+            ),
+            stackTrace: stackTrace,
+            level: 1000,
+          );
           return ApiResponse.error(ApiError.jsonParsing(response.body));
         }
       } else {
@@ -272,4 +290,14 @@ class HttpApiClient implements SafeApiClient {
       return ApiResponse.error(ApiError.dartHttpClient(e));
     }
   }
+}
+
+final class _JsonResponseParsingException implements Exception {
+  final String message;
+  final Object innerError;
+
+  const _JsonResponseParsingException({required this.message, required this.innerError});
+
+  @override
+  String toString() => "$message (innerError: ${innerError.runtimeType.toString()})";
 }
