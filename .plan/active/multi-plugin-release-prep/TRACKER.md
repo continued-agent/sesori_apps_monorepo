@@ -2,11 +2,11 @@
 
 ## Current State
 
-- **Implementation base:** `origin/main` at `7c2a7343`
-- **Series state:** Steps 1/6 through 4.B/6 are merged; oversized PR #620 is
-  frozen as a draft and replaced by the Step 4.C/6 through 4.F/6 sequence
-- **Current step:** Step 4.C/6 — migration and DAO verification
-- **Next action:** monitor and merge PR #625
+- **Implementation base:** `origin/main` at `27d46e71`
+- **Series state:** Steps 1/6 through 4.C/6 are merged; oversized PR #620 is
+  frozen as a draft and replaced by the Step 4.D/6 through 4.F/6 sequence
+- **Current step:** Step 4.D/6 — scoped capture/persistence repository
+- **Next action:** monitor and merge PR #626
 
 ## Delivery
 
@@ -17,8 +17,8 @@
 | [x] | Step 3/6 — aggregate scoped plugin options | `multi-plugin-release-prep-plugin-options` | PR #616 merged |
 | [x] | Step 4.A/6 — wire contracts and runtime seams | `multi-plugin-release-prep-bridge-contracts` | PR #623 merged |
 | [x] | Step 4.B/6 — scoped cache schema/runtime database | `multi-plugin-release-prep-cache-schema` | PR #624 merged |
-| [ ] | Step 4.C/6 — migration and DAO verification | `multi-plugin-release-prep-cache-verification` | PR #625 ready |
-| [ ] | Step 4.D/6 — capture/persistence repository | `multi-plugin-release-prep-cache-repository` | Blocked on 4.C |
+| [x] | Step 4.C/6 — migration and DAO verification | `multi-plugin-release-prep-cache-verification` | PR #625 merged |
+| [ ] | Step 4.D/6 — capture/persistence repository | `multi-plugin-release-prep-cache-repository` | PR #626 ready |
 | [ ] | Step 4.E/6 — cache policy/coalescing service | `multi-plugin-release-prep-cache-service` | Blocked on 4.D |
 | [ ] | Step 4.F/6 — route, listeners, and lifecycle wiring | `multi-plugin-release-prep-cache-route` | Blocked on 4.E |
 | [ ] | Step 5/6 — cached New Session client flow | `multi-plugin-release-prep-client-options` | Blocked on Step 4 merge |
@@ -152,4 +152,12 @@
   validation against current Drift declarations, scope-shape/FK behavior, and
   exact-key revision-CAS DAO tests. All 30 migration/persistence tests and
   bridge-app fatal analysis passed with `git diff --check`; no full-schema v12
-  Dart test fixture is committed.
+  Dart test fixture is committed. PR #625 merged to `main` as `27d46e71`.
+- Step 4.D/6 preparation (2026-07-30): added sealed scope-aware cache keys and a
+  Layer-2 repository for project/binding resolution, plugin capture, typed JSON
+  persistence, and generation-fenced CAS. Review follow-up rejects mismatched
+  project capture paths without rendering path values, keeps decoder presentation
+  payload-independent, wraps corrupted persisted enum values while preserving
+  database failures, and uses typed JSON test helpers. All 62 repository/runtime
+  tests and bridge-app fatal analysis passed with `git diff --check`. Aristotle
+  approved the implementation architecture without findings.
