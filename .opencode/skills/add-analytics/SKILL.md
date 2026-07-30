@@ -27,18 +27,13 @@ only honest signal for a defined funnel step.
 
 ## Current and planned seams
 
-Until `.plan/active/user-analytics/` step 3 lands, the existing event union is
-`client/app/lib/core/analytics/analytics_event.dart` and the mobile shell owns
-`AnalyticsReporter`. Do not pretend the planned core files already exist or
-partially introduce the new architecture outside the series.
-
-After step 3 lands, the source of truth is the closed models under
+The source of truth is the closed models under
 `client/module_core/lib/src/foundation/models/product_analytics/`, with
 repository delivery/preference records under `repositories/models/` and service
 state under `services/models/`:
 
-- Consumers call `ProductAnalyticsService` for authenticated account-linked
-  events.
+- This dormant Step 3.A foundation has no account-linked consumer seam. Do not
+  add those consumers until Step 3.C introduces `ProductAnalyticsService`.
 - The three approved pre-auth login events call
   `InstallationAnalyticsService`; they are account-less and preference-exempt
   by explicit product decision.
@@ -47,9 +42,6 @@ state under `services/models/`:
   `AnalyticsApi` directly.
 - Mobile implements `AnalyticsClient` with Firebase; desktop uses a no-op
   adapter until desktop analytics has its own approved scope.
-
-Remove this transitional “until step 3” paragraph in the step-3 implementation
-PR after updating all in-repository consumers in lockstep.
 
 ## Choose the authoritative hook
 

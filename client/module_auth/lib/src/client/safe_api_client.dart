@@ -7,6 +7,7 @@ import "api_response.dart";
 enum HttpMethod {
   get("GET"),
   post("POST"),
+  put("PUT"),
   patch("PATCH"),
   delete("DELETE"),
   ;
@@ -37,6 +38,18 @@ abstract class SafeApiClient {
     required final Object? body,
     final ContentType? contentType,
     final bool logBody,
+  });
+
+  /// If [contentType] is null, [ContentType.json] will be used.
+  Future<ApiResponse<T>> put<T>({
+    required final Uri url,
+    // ignore: no_slop_linter/prefer_specific_type, json parsing callback
+    required final T Function(dynamic json) fromJson,
+    required final Map<String, String>? headers,
+    // ignore: no_slop_linter/prefer_specific_type
+    required final Object? body,
+    required final ContentType? contentType,
+    required final bool logBody,
   });
 
   /// If [contentType] is null, [ContentType.json] will be used.

@@ -4,6 +4,7 @@ import "package:http/http.dart" as http;
 import "package:injectable/injectable.dart";
 
 import "../auth_manager.dart";
+import "../models/auth_state.dart";
 import "api_error.dart";
 import "api_response.dart";
 import "http_api_client.dart";
@@ -31,12 +32,31 @@ class AuthenticatedHttpApiClient implements SafeApiClient {
     bool logBody = false,
   }) {
     return _withAuth(
+      expectedUserId: null,
       makeRequest: (token) => _client.get(
         url,
         fromJson: fromJson,
         headers: _withAuthHeader(headers, token: token),
         contentType: contentType,
         logBody: logBody,
+      ),
+    );
+  }
+
+  /// Makes an authenticated GET only while [userId] remains the current
+  /// account, including across a forced token refresh and 401 retry.
+  Future<ApiResponse<T>> getForUser<T>({
+    required Uri url,
+    required String userId,
+    // ignore: no_slop_linter/prefer_specific_type, json parsing callback
+    required T Function(dynamic json) fromJson,
+  }) {
+    return _withAuth(
+      expectedUserId: userId,
+      makeRequest: (token) => _client.get(
+        url,
+        fromJson: fromJson,
+        headers: _withAuthHeader(null, token: token),
       ),
     );
   }
@@ -52,6 +72,7 @@ class AuthenticatedHttpApiClient implements SafeApiClient {
     bool logBody = false,
   }) {
     return _withAuth(
+      expectedUserId: null,
       makeRequest: (token) => _client.post(
         url,
         fromJson: fromJson,
@@ -59,6 +80,51 @@ class AuthenticatedHttpApiClient implements SafeApiClient {
         body: body,
         contentType: contentType,
         logBody: logBody,
+      ),
+    );
+  }
+
+  @override
+  // ignore: no_slop_linter/prefer_specific_type, json parsing callback
+  Future<ApiResponse<T>> put<T>({
+    required Uri url,
+    required T Function(dynamic json) fromJson,
+    required Map<String, String>? headers,
+    required Object? body,
+    required ContentType? contentType,
+    required bool logBody,
+  }) {
+    return _withAuth(
+      expectedUserId: null,
+      makeRequest: (token) => _client.put(
+        url: url,
+        fromJson: fromJson,
+        headers: _withAuthHeader(headers, token: token),
+        body: body,
+        contentType: contentType,
+        logBody: logBody,
+      ),
+    );
+  }
+
+  /// Makes an authenticated PUT only while [userId] remains the current
+  /// account, including across a forced token refresh and 401 retry.
+  Future<ApiResponse<T>> putForUser<T>({
+    required Uri url,
+    required String userId,
+    // ignore: no_slop_linter/prefer_specific_type, json parsing callback
+    required T Function(dynamic json) fromJson,
+    required String body,
+  }) {
+    return _withAuth(
+      expectedUserId: userId,
+      makeRequest: (token) => _client.put(
+        url: url,
+        fromJson: fromJson,
+        headers: _withAuthHeader(null, token: token),
+        body: body,
+        contentType: null,
+        logBody: false,
       ),
     );
   }
@@ -74,6 +140,7 @@ class AuthenticatedHttpApiClient implements SafeApiClient {
     bool logBody = false,
   }) {
     return _withAuth(
+      expectedUserId: null,
       makeRequest: (token) => _client.patch(
         url,
         fromJson: fromJson,
@@ -95,6 +162,7 @@ class AuthenticatedHttpApiClient implements SafeApiClient {
     bool logBody = false,
   }) {
     return _withAuth(
+      expectedUserId: null,
       makeRequest: (token) => _client.delete(
         url,
         fromJson: fromJson,
@@ -116,6 +184,7 @@ class AuthenticatedHttpApiClient implements SafeApiClient {
     Duration? timeout,
   }) {
     return _withAuth(
+      expectedUserId: null,
       makeRequest: (token) async {
         final files = await createFiles();
         return _client.postMultipart(
@@ -131,23 +200,51 @@ class AuthenticatedHttpApiClient implements SafeApiClient {
   }
 
   Future<ApiResponse<T>> _withAuth<T>({
+    required String? expectedUserId,
     required Future<ApiResponse<T>> Function(String token) makeRequest,
   }) async {
+    if (!_matchesExpectedUser(expectedUserId)) {
+      return ApiResponse.error(ApiError.notAuthenticated());
+    }
     final token = await _authManager.getFreshAccessToken();
     if (token == null) {
       return ApiResponse.error(ApiError.notAuthenticated());
     }
+    if (!_matchesExpectedUser(expectedUserId)) {
+      return ApiResponse.error(ApiError.notAuthenticated());
+    }
 
     final response = await makeRequest(token);
+    if (!_matchesExpectedUser(expectedUserId)) {
+      return ApiResponse.error(ApiError.notAuthenticated());
+    }
     if (response case ErrorResponse<T>(error: NonSuccessCodeError(errorCode: 401))) {
+      if (!_matchesExpectedUser(expectedUserId)) {
+        return ApiResponse.error(ApiError.notAuthenticated());
+      }
       final refreshedToken = await _authManager.getFreshAccessToken(forceRefresh: true);
+      if (!_matchesExpectedUser(expectedUserId)) {
+        return ApiResponse.error(ApiError.notAuthenticated());
+      }
       if (refreshedToken == null) {
         return response;
       }
-      return makeRequest(refreshedToken);
+      final retryResponse = await makeRequest(refreshedToken);
+      if (!_matchesExpectedUser(expectedUserId)) {
+        return ApiResponse.error(ApiError.notAuthenticated());
+      }
+      return retryResponse;
     }
 
     return response;
+  }
+
+  bool _matchesExpectedUser(String? expectedUserId) {
+    if (expectedUserId == null) return true;
+    return switch (_authManager.currentState) {
+      AuthAuthenticated(:final user) => user.id == expectedUserId,
+      AuthInitial() || AuthUnauthenticated() || AuthAuthenticating() || AuthFailed() => false,
+    };
   }
 
   Map<String, String> _withAuthHeader(Map<String, String>? headers, {required String token}) => {
