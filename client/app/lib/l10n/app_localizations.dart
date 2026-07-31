@@ -1213,12 +1213,6 @@ abstract class AppLocalizations {
   /// **'Tool'**
   String get sessionDetailToolUnknown;
 
-  /// Fallback label shown for a file attachment when the filename cannot be determined.
-  ///
-  /// In en, this message translates to:
-  /// **'Unknown file'**
-  String get sessionDetailFileUnknown;
-
   /// No description provided for @sessionDetailImageOpen.
   ///
   /// In en, this message translates to:
@@ -1258,7 +1252,7 @@ abstract class AppLocalizations {
   /// No description provided for @sessionDetailImageSaved.
   ///
   /// In en, this message translates to:
-  /// **'Image saved to Photos'**
+  /// **'Image saved'**
   String get sessionDetailImageSaved;
 
   /// No description provided for @sessionDetailImageSaveFailed.
@@ -1285,11 +1279,11 @@ abstract class AppLocalizations {
   /// **'Couldn’t copy image'**
   String get sessionDetailImageCopyFailed;
 
-  /// No description provided for @sessionDetailImagePhotosPermissionDenied.
+  /// No description provided for @sessionDetailImageSaveAccessDenied.
   ///
   /// In en, this message translates to:
-  /// **'Allow Photos access to save this image'**
-  String get sessionDetailImagePhotosPermissionDenied;
+  /// **'Permission denied while saving this image'**
+  String get sessionDetailImageSaveAccessDenied;
 
   /// No description provided for @sessionDetailToolPending.
   ///

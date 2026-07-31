@@ -595,9 +595,6 @@ class AppLocalizationsEn extends AppLocalizations {
   String get sessionDetailToolUnknown => 'Tool';
 
   @override
-  String get sessionDetailFileUnknown => 'Unknown file';
-
-  @override
   String get sessionDetailImageOpen => 'Open image';
 
   @override
@@ -616,7 +613,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get sessionDetailImageOpenOriginal => 'Open original';
 
   @override
-  String get sessionDetailImageSaved => 'Image saved to Photos';
+  String get sessionDetailImageSaved => 'Image saved';
 
   @override
   String get sessionDetailImageSaveFailed => 'Couldn’t save image';
@@ -631,7 +628,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get sessionDetailImageCopyFailed => 'Couldn’t copy image';
 
   @override
-  String get sessionDetailImagePhotosPermissionDenied => 'Allow Photos access to save this image';
+  String get sessionDetailImageSaveAccessDenied => 'Permission denied while saving this image';
 
   @override
   String get sessionDetailToolPending => 'Pending';
