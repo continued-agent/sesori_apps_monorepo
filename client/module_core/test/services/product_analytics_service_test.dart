@@ -312,13 +312,16 @@ void main() {
 
     reconciliation.complete(ProductAnalyticsPreferenceSynchronized(record: record));
     await readinessFuture;
-    await waitForAnalyticsCalls(count: 1);
+    await waitForAnalyticsCalls(count: 2);
 
     expect(preferenceRepository.reconcileCalls, hasLength(1));
     expect(service.state.isActive, isTrue);
     expect(
       analyticsRepository.calls.map((call) => call.envelope.event),
-      [const ProductAnalyticsEvent.analyticsSchemaReady()],
+      [
+        const ProductAnalyticsEvent.analyticsSchemaReady(),
+        const ProductAnalyticsEvent.analyticsActivationReady(),
+      ],
     );
     expect(analyticsRepository.calls.map((call) => call.userKey), everyElement(_userKeyA));
 
@@ -357,6 +360,7 @@ void main() {
       analyticsRepository.calls.map((call) => call.envelope.event),
       [
         const ProductAnalyticsEvent.analyticsSchemaReady(),
+        const ProductAnalyticsEvent.analyticsActivationReady(),
         const ProductAnalyticsEvent.sessionMessageSent(
           submission: AnalyticsSubmission.text(inputMode: AnalyticsInputMode.typed),
         ),
@@ -393,13 +397,14 @@ void main() {
 
     analyticsRepository.result = AnalyticsDeliveryResult.acceptedBySdk;
     await service.refreshPreference();
-    await waitForAnalyticsCalls(count: 3);
+    await waitForAnalyticsCalls(count: 4);
 
     expect(
       analyticsRepository.calls.map((call) => call.envelope.event),
       [
         const ProductAnalyticsEvent.analyticsSchemaReady(),
         const ProductAnalyticsEvent.analyticsSchemaReady(),
+        const ProductAnalyticsEvent.analyticsActivationReady(),
         const ProductAnalyticsEvent.sessionMessageSent(
           submission: AnalyticsSubmission.text(inputMode: AnalyticsInputMode.typed),
         ),
@@ -419,6 +424,7 @@ void main() {
     );
     analyticsRepository.results = Queue.of([
       AnalyticsDeliveryResult.acceptedBySdk,
+      AnalyticsDeliveryResult.acceptedBySdk,
       AnalyticsDeliveryResult.failed,
     ]);
     final logLines = <String>[];
@@ -433,7 +439,7 @@ void main() {
           occurredAtUtc: DateTime.utc(2026, 7, 30),
         );
         await service.markPostSplashReady();
-        await waitForAnalyticsCalls(count: 2);
+        await waitForAnalyticsCalls(count: 3);
       },
       zoneSpecification: ZoneSpecification(print: (_, _, _, line) => logLines.add(line)),
     );
@@ -454,6 +460,7 @@ void main() {
       ..add((_, _) => refreshResult.future);
     final firstCandidateResult = Completer<AnalyticsDeliveryResult>();
     analyticsRepository.deliveryFutures
+      ..add(Future.value(AnalyticsDeliveryResult.acceptedBySdk))
       ..add(Future.value(AnalyticsDeliveryResult.acceptedBySdk))
       ..add(firstCandidateResult.future);
 
@@ -478,7 +485,7 @@ void main() {
     );
 
     await service.markPostSplashReady();
-    await waitForAnalyticsCalls(count: 2);
+    await waitForAnalyticsCalls(count: 3);
     final refreshFuture = service.refreshPreference();
     while (preferenceRepository.reconcileCalls.length < 2) {
       await Future<void>.delayed(Duration.zero);
@@ -487,16 +494,17 @@ void main() {
 
     firstCandidateResult.complete(AnalyticsDeliveryResult.acceptedBySdk);
     await Future<void>.delayed(Duration.zero);
-    expect(analyticsRepository.calls, hasLength(2));
+    expect(analyticsRepository.calls, hasLength(3));
 
     refreshResult.complete(ProductAnalyticsPreferenceSynchronized(record: enabled));
     await refreshFuture;
-    await waitForAnalyticsCalls(count: 3);
+    await waitForAnalyticsCalls(count: 4);
 
     expect(
       analyticsRepository.calls.map((call) => call.envelope.event),
       [
         const ProductAnalyticsEvent.analyticsSchemaReady(),
+        const ProductAnalyticsEvent.analyticsActivationReady(),
         const ProductAnalyticsEvent.sessionMessageSent(
           submission: AnalyticsSubmission.text(inputMode: AnalyticsInputMode.typed),
         ),
@@ -548,13 +556,168 @@ void main() {
 
     analyticsRepository.result = AnalyticsDeliveryResult.acceptedBySdk;
     await service.refreshPreference();
-    await waitForAnalyticsCalls(count: 2);
+    await waitForAnalyticsCalls(count: 3);
 
     expect(
       analyticsRepository.calls.map((call) => call.envelope.event),
       [
         const ProductAnalyticsEvent.analyticsSchemaReady(),
         const ProductAnalyticsEvent.analyticsSchemaReady(),
+        const ProductAnalyticsEvent.analyticsActivationReady(),
+      ],
+    );
+  });
+
+  test("later analytics activity retries activation readiness and deferred candidates", () async {
+    createService();
+    final record = _record(
+      userId: _userA.id,
+      userKey: _userKeyA,
+      preference: ProductAnalyticsPreference.enabled,
+    );
+    preferenceRepository.reconcileHandlers.add(
+      (_, _) async => ProductAnalyticsPreferenceSynchronized(record: record),
+    );
+    analyticsRepository.results = Queue.of([
+      AnalyticsDeliveryResult.acceptedBySdk,
+      AnalyticsDeliveryResult.failed,
+    ]);
+
+    await service.start();
+    expect(
+      await service.logEvent(
+        event: const ProductAnalyticsEvent.sessionDiffViewed(
+          changeState: AnalyticsChangeState.nonEmpty,
+        ),
+        occurredAtUtc: DateTime.utc(2026, 7, 30),
+      ),
+      AnalyticsDeliveryResult.deferredUntilPreference,
+    );
+    await service.markPostSplashReady();
+    await waitForAnalyticsCalls(count: 2);
+    expect(
+      analyticsRepository.calls.map((call) => call.envelope.event),
+      [
+        const ProductAnalyticsEvent.analyticsSchemaReady(),
+        const ProductAnalyticsEvent.analyticsActivationReady(),
+      ],
+    );
+
+    analyticsRepository.result = AnalyticsDeliveryResult.acceptedBySdk;
+    expect(
+      await service.logEvent(
+        event: const ProductAnalyticsEvent.sessionMessageSent(
+          submission: AnalyticsSubmission.text(inputMode: AnalyticsInputMode.typed),
+        ),
+        occurredAtUtc: DateTime.utc(2026, 7, 30),
+      ),
+      AnalyticsDeliveryResult.acceptedBySdk,
+    );
+    await waitForAnalyticsCalls(count: 5);
+
+    expect(
+      analyticsRepository.calls.map((call) => call.envelope.event),
+      [
+        const ProductAnalyticsEvent.analyticsSchemaReady(),
+        const ProductAnalyticsEvent.analyticsActivationReady(),
+        const ProductAnalyticsEvent.sessionMessageSent(
+          submission: AnalyticsSubmission.text(inputMode: AnalyticsInputMode.typed),
+        ),
+        const ProductAnalyticsEvent.analyticsActivationReady(),
+        const ProductAnalyticsEvent.sessionDiffViewed(
+          changeState: AnalyticsChangeState.nonEmpty,
+        ),
+      ],
+    );
+  });
+
+  test("later analytics activity retries activation readiness without deferred candidates", () async {
+    createService();
+    final record = _record(
+      userId: _userA.id,
+      userKey: _userKeyA,
+      preference: ProductAnalyticsPreference.enabled,
+    );
+    preferenceRepository.reconcileHandlers.add(
+      (_, _) async => ProductAnalyticsPreferenceSynchronized(record: record),
+    );
+    analyticsRepository.results = Queue.of([
+      AnalyticsDeliveryResult.acceptedBySdk,
+      AnalyticsDeliveryResult.failed,
+    ]);
+
+    await service.start();
+    await service.markPostSplashReady();
+    await waitForAnalyticsCalls(count: 2);
+
+    analyticsRepository.result = AnalyticsDeliveryResult.acceptedBySdk;
+    expect(
+      await service.logEvent(
+        event: const ProductAnalyticsEvent.sessionMessageSent(
+          submission: AnalyticsSubmission.text(inputMode: AnalyticsInputMode.typed),
+        ),
+        occurredAtUtc: DateTime.utc(2026, 7, 30),
+      ),
+      AnalyticsDeliveryResult.acceptedBySdk,
+    );
+    await waitForAnalyticsCalls(count: 4);
+
+    expect(
+      analyticsRepository.calls.map((call) => call.envelope.event),
+      [
+        const ProductAnalyticsEvent.analyticsSchemaReady(),
+        const ProductAnalyticsEvent.analyticsActivationReady(),
+        const ProductAnalyticsEvent.sessionMessageSent(
+          submission: AnalyticsSubmission.text(inputMode: AnalyticsInputMode.typed),
+        ),
+        const ProductAnalyticsEvent.analyticsActivationReady(),
+      ],
+    );
+  });
+
+  test("analytics activity queues one readiness retry behind an in-flight attempt", () async {
+    createService();
+    final record = _record(
+      userId: _userA.id,
+      userKey: _userKeyA,
+      preference: ProductAnalyticsPreference.enabled,
+    );
+    preferenceRepository.reconcileHandlers.add(
+      (_, _) async => ProductAnalyticsPreferenceSynchronized(record: record),
+    );
+    final activationResult = Completer<AnalyticsDeliveryResult>();
+    analyticsRepository.deliveryFutures.addAll([
+      Future.value(AnalyticsDeliveryResult.acceptedBySdk),
+      activationResult.future,
+      Future.value(AnalyticsDeliveryResult.acceptedBySdk),
+      Future.value(AnalyticsDeliveryResult.acceptedBySdk),
+    ]);
+
+    await service.start();
+    await service.markPostSplashReady();
+    await waitForAnalyticsCalls(count: 2);
+
+    expect(
+      await service.logEvent(
+        event: const ProductAnalyticsEvent.sessionMessageSent(
+          submission: AnalyticsSubmission.text(inputMode: AnalyticsInputMode.typed),
+        ),
+        occurredAtUtc: DateTime.utc(2026, 7, 30),
+      ),
+      AnalyticsDeliveryResult.acceptedBySdk,
+    );
+    activationResult.complete(AnalyticsDeliveryResult.failed);
+    await waitForAnalyticsCalls(count: 4);
+
+    expect(
+      analyticsRepository.calls.map((call) => call.envelope.event),
+      [
+        const ProductAnalyticsEvent.analyticsSchemaReady(),
+        const ProductAnalyticsEvent.analyticsActivationReady(),
+        const ProductAnalyticsEvent.sessionMessageSent(
+          submission: AnalyticsSubmission.text(inputMode: AnalyticsInputMode.typed),
+        ),
+        const ProductAnalyticsEvent.analyticsActivationReady(),
       ],
     );
   });
@@ -589,13 +752,16 @@ void main() {
 
     preferenceRepository.throwOnLoad = false;
     await service.refreshPreference();
-    await waitForAnalyticsCalls(count: 1);
+    await waitForAnalyticsCalls(count: 2);
 
     expect(preferenceRepository.reconcileCalls, hasLength(1));
     expect(service.state.isActive, isTrue);
     expect(
       analyticsRepository.calls.map((call) => call.envelope.event),
-      [const ProductAnalyticsEvent.analyticsSchemaReady()],
+      [
+        const ProductAnalyticsEvent.analyticsSchemaReady(),
+        const ProductAnalyticsEvent.analyticsActivationReady(),
+      ],
     );
   });
 

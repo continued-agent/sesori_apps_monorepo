@@ -536,16 +536,26 @@ class SessionDetailCubit extends Cubit<SessionDetailState> {
       SesoriSessionUpdated(:final info) => info.parentID == _sessionId,
       // Permission/question events for a descendant (sub-agent) session that
       // surfaces on this session must be buffered so they replay after load.
-      SesoriPermissionAsked(:final sessionID, :final displaySessionId) =>
-        _surfacesChildRequestHere(sessionID: sessionID, displaySessionId: displaySessionId),
-      SesoriPermissionReplied(:final sessionID, :final displaySessionId) =>
-        _surfacesChildRequestHere(sessionID: sessionID, displaySessionId: displaySessionId),
-      SesoriQuestionAsked(:final sessionID, :final displaySessionId) =>
-        _surfacesChildRequestHere(sessionID: sessionID, displaySessionId: displaySessionId),
-      SesoriQuestionReplied(:final sessionID, :final displaySessionId) =>
-        _surfacesChildRequestHere(sessionID: sessionID, displaySessionId: displaySessionId),
-      SesoriQuestionRejected(:final sessionID, :final displaySessionId) =>
-        _surfacesChildRequestHere(sessionID: sessionID, displaySessionId: displaySessionId),
+      SesoriPermissionAsked(:final sessionID, :final displaySessionId) => _surfacesChildRequestHere(
+        sessionID: sessionID,
+        displaySessionId: displaySessionId,
+      ),
+      SesoriPermissionReplied(:final sessionID, :final displaySessionId) => _surfacesChildRequestHere(
+        sessionID: sessionID,
+        displaySessionId: displaySessionId,
+      ),
+      SesoriQuestionAsked(:final sessionID, :final displaySessionId) => _surfacesChildRequestHere(
+        sessionID: sessionID,
+        displaySessionId: displaySessionId,
+      ),
+      SesoriQuestionReplied(:final sessionID, :final displaySessionId) => _surfacesChildRequestHere(
+        sessionID: sessionID,
+        displaySessionId: displaySessionId,
+      ),
+      SesoriQuestionRejected(:final sessionID, :final displaySessionId) => _surfacesChildRequestHere(
+        sessionID: sessionID,
+        displaySessionId: displaySessionId,
+      ),
       // Definitively irrelevant high-volume events.
       SesoriServerConnected() ||
       SesoriServerHeartbeat() ||
@@ -1277,6 +1287,7 @@ class SessionDetailCubit extends Cubit<SessionDetailState> {
       if (result case ErrorResponse(:final error)) {
         throw error;
       }
+      _reportProductEvent(event: const ProductAnalyticsEvent.sessionQuestionAnswered());
       return true;
     } on Object catch (e, st) {
       loge("Failed to reply to question $requestId", e, st);
@@ -1300,6 +1311,7 @@ class SessionDetailCubit extends Cubit<SessionDetailState> {
       if (result case ErrorResponse(:final error)) {
         throw error;
       }
+      _reportProductEvent(event: const ProductAnalyticsEvent.sessionQuestionRejected());
       return true;
     } on Object catch (e, st) {
       loge("Failed to reject question $requestId", e, st);
@@ -1316,18 +1328,34 @@ class SessionDetailCubit extends Cubit<SessionDetailState> {
     _onPermissionResolved(requestId);
     _notificationCanceller.cancelForSession(sessionId: sessionId);
     try {
-      await _permissionRepository.replyToPermission(
+      final result = await _permissionRepository.replyToPermission(
         requestId: requestId,
         sessionId: sessionId,
         reply: reply,
       );
-      return true;
+      switch (result) {
+        case SuccessResponse():
+          _reportProductEvent(
+            event: ProductAnalyticsEvent.sessionPermissionAnswered(
+              decision: _analyticsPermissionDecision(reply: reply),
+            ),
+          );
+          return true;
+        case ErrorResponse(:final error):
+          throw error;
+      }
     } on Object catch (e, st) {
       loge("Failed to reply to permission $requestId", e, st);
       await _loadMessages(isReload: true);
       return false;
     }
   }
+
+  AnalyticsPermissionDecision _analyticsPermissionDecision({required PermissionReply reply}) => switch (reply) {
+    PermissionReply.once => AnalyticsPermissionDecision.once,
+    PermissionReply.always => AnalyticsPermissionDecision.always,
+    PermissionReply.reject => AnalyticsPermissionDecision.reject,
+  };
 
   // ---------------------------------------------------------------------------
   // Settings & control
@@ -1431,6 +1459,7 @@ class SessionDetailCubit extends Cubit<SessionDetailState> {
           throw error;
         }
       }
+      _reportProductEvent(event: const ProductAnalyticsEvent.sessionAbortSucceeded());
     } on Object catch (e, st) {
       loge("Failed to abort session(s)", e, st);
     }

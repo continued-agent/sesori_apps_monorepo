@@ -18,10 +18,12 @@ class ProductAnalyticsService {
   final AnalyticsRepository _analyticsRepository;
   final ProductAnalyticsPreferenceService _preferenceService;
   final ProductAnalyticsGenerationEventDispatcher _schemaReadiness = ProductAnalyticsGenerationEventDispatcher();
+  final ProductAnalyticsGenerationEventDispatcher _activationReadiness = ProductAnalyticsGenerationEventDispatcher();
 
   StreamSubscription<ProductAnalyticsState>? _stateSubscription;
   DeferredProductAnalyticsCandidates? _deferredCandidates;
   ({int generation, Future<void> future})? _activeGenerationDispatch;
+  ProductAnalyticsDeliveryContext? _trailingGenerationDispatch;
   Future<void>? _startFuture;
   Future<void>? _disposeFuture;
   bool _disposed = false;
@@ -65,7 +67,10 @@ class ProductAnalyticsService {
     if (_disposed) return AnalyticsDeliveryResult.failed;
     final envelope = ProductAnalyticsEnvelope(event: event, occurredAtUtc: occurredAtUtc);
     final context = _preferenceService.deliveryContext;
-    if (context != null) return _deliver(envelope: envelope, context: context);
+    if (context != null) {
+      _retryActiveGenerationDispatch(context: context);
+      return _deliver(envelope: envelope, context: context);
+    }
 
     final generation = _preferenceService.deferrableGeneration;
     if (generation == null) return AnalyticsDeliveryResult.failed;
@@ -76,6 +81,14 @@ class ProductAnalyticsService {
     final retention = candidates.retain(envelope: envelope);
     _deferredCandidates = retention.candidates;
     return retention.retained ? AnalyticsDeliveryResult.deferredUntilPreference : AnalyticsDeliveryResult.failed;
+  }
+
+  void _retryActiveGenerationDispatch({required ProductAnalyticsDeliveryContext context}) {
+    unawaited(
+      _coalesceActiveGenerationDispatch(context: context).catchError((Object error, StackTrace stackTrace) {
+        logw("Failed to retry deferred product analytics delivery", error, stackTrace);
+      }),
+    );
   }
 
   Future<AnalyticsDeliveryResult> _deliver({
@@ -109,12 +122,21 @@ class ProductAnalyticsService {
 
   Future<void> _coalesceActiveGenerationDispatch({required ProductAnalyticsDeliveryContext context}) {
     final active = _activeGenerationDispatch;
-    if (active != null && active.generation == context.generation) return active.future;
+    if (active != null && active.generation == context.generation) {
+      _trailingGenerationDispatch = context;
+      return active.future;
+    }
+    _trailingGenerationDispatch = null;
 
     late final Future<void> future;
     future = _dispatchActiveGeneration(context: context).whenComplete(() {
       if (identical(_activeGenerationDispatch?.future, future)) {
         _activeGenerationDispatch = null;
+        final trailingContext = _trailingGenerationDispatch;
+        _trailingGenerationDispatch = null;
+        if (trailingContext != null && _isCurrentActiveContext(context: trailingContext)) {
+          _retryActiveGenerationDispatch(context: trailingContext);
+        }
       }
     });
     _activeGenerationDispatch = (generation: context.generation, future: future);
@@ -157,6 +179,24 @@ class ProductAnalyticsService {
     }
     if (!_isCurrentActiveContext(context: context)) return;
 
+    final activationResult = await _activationReadiness.dispatch(
+      generation: context.generation,
+      deliver: () => _deliver(
+        envelope: ProductAnalyticsEnvelope(
+          event: const ProductAnalyticsEvent.analyticsActivationReady(),
+          occurredAtUtc: DateTime.now().toUtc(),
+        ),
+        context: context,
+      ),
+    );
+    if (activationResult != AnalyticsDeliveryResult.acceptedBySdk) {
+      if (_isCurrentActiveContext(context: context)) {
+        logw("Failed to deliver analytics activation readiness");
+      }
+      return;
+    }
+    if (!_isCurrentActiveContext(context: context)) return;
+
     while (_isCurrentActiveContext(context: context)) {
       final candidates = _deferredCandidates;
       if (candidates == null || candidates.generation != context.generation) return;
@@ -187,6 +227,7 @@ class ProductAnalyticsService {
     _disposed = true;
     _deferredCandidates = null;
     _activeGenerationDispatch = null;
+    _trailingGenerationDispatch = null;
     await _stateSubscription?.cancel();
     _stateSubscription = null;
     await _preferenceService.dispose();

@@ -18,6 +18,7 @@ import "package:sesori_dart_core/sesori_dart_core.dart"
         OnboardingSurface,
         ProductAnalyticsEvent,
         ProductAnalyticsService,
+        ProductAnalyticsState,
         RouteSource;
 import "package:sesori_dart_core/src/api/client/relay_http_client.dart";
 import "package:sesori_dart_core/src/api/project_api.dart";
@@ -147,12 +148,16 @@ class MockUrlLauncher extends Mock implements UrlLauncher {}
 class MockProductAnalyticsService extends Mock implements ProductAnalyticsService {}
 
 void stubProductAnalyticsService({required MockProductAnalyticsService service}) {
+  final states = BehaviorSubject<ProductAnalyticsState>.seeded(ProductAnalyticsState.initial);
+  addTearDown(states.close);
   when(
     () => service.logEvent(
       event: any(named: "event"),
       occurredAtUtc: any(named: "occurredAtUtc"),
     ),
   ).thenAnswer((_) async => AnalyticsDeliveryResult.acceptedBySdk);
+  when(() => service.state).thenAnswer((_) => states.value);
+  when(() => service.stateStream).thenAnswer((_) => states.stream);
 }
 
 ComposerDraftRepository inMemoryComposerDraftRepository() => ComposerDraftRepository(storage: ComposerDraftStorage());
@@ -187,9 +192,7 @@ void _registerListServices({
     getIt.unregister<ProductAnalyticsService>();
   }
   final analyticsService = productAnalyticsService ?? MockProductAnalyticsService();
-  if (productAnalyticsService != null) {
-    stubProductAnalyticsService(service: analyticsService);
-  }
+  stubProductAnalyticsService(service: analyticsService);
   getIt.registerSingleton<ProjectListService>(
     ProjectListService(
       repository: projectRepository,
