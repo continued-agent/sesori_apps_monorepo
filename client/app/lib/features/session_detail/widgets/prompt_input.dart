@@ -1,5 +1,6 @@
 import "dart:async";
 
+import "package:flutter/gestures.dart" show kPrimaryButton;
 import "package:flutter/material.dart";
 import "package:flutter/services.dart";
 import "package:flutter_bloc/flutter_bloc.dart";
@@ -84,6 +85,7 @@ class PromptInput extends StatefulWidget {
 
 class _PromptInputState extends State<PromptInput> {
   static const _draftCalculator = ComposerDraftCalculator();
+  static const _minimumRecordingDuration = Duration(milliseconds: 200);
   final _controller = TextEditingController();
   final _focusNode = FocusNode();
   late ComposerDraft _draft;
@@ -91,6 +93,13 @@ class _PromptInputState extends State<PromptInput> {
   bool _isApplyingDraft = false;
   _VoiceState _voiceState = _VoiceState.idle;
   StreamSubscription<void>? _maxDurationSub;
+  Timer? _minimumRecordingDurationTimer;
+  bool _minimumRecordingDurationReached = false;
+
+  /// The pointer that owns the current hold. Raw pointer events start the
+  /// recorder on touch-down without Flutter's long-press recognition delay.
+  int? _recordingPointer;
+  Offset? _recordingPointerPosition;
 
   /// Keeps the typing layout mounted after the keyboard affordance was tapped
   /// while the field wasn't in the tree yet (hold-to-talk / compact layouts),
@@ -109,8 +118,8 @@ class _PromptInputState extends State<PromptInput> {
   _ComposerLayout? _pinnedVoiceLayout;
 
   /// Set when the hold is released while [_startRecording] is still awaiting
-  /// the recorder, so the start path stops immediately once recording begins
-  /// instead of letting it outlive the gesture.
+  /// the recorder, so the start path discards the incomplete recording once
+  /// startup settles instead of letting it outlive the gesture.
   bool _releaseRequestedDuringStart = false;
 
   /// True while [_startRecording] is awaiting the recorder ([_voiceState] is
@@ -161,6 +170,7 @@ class _PromptInputState extends State<PromptInput> {
   @override
   void dispose() {
     _maxDurationSub?.cancel();
+    _minimumRecordingDurationTimer?.cancel();
     // Fire-and-forget cancel if the widget is disposed mid-recording or mid-transcription.
     if (_voiceState != _VoiceState.idle) {
       _voiceService.cancelRecording();
@@ -311,6 +321,9 @@ class _PromptInputState extends State<PromptInput> {
     _voiceInteractionId++;
     _isRecordStartInFlight = true;
     _releaseRequestedDuringStart = false;
+    _minimumRecordingDurationTimer?.cancel();
+    _minimumRecordingDurationTimer = null;
+    _minimumRecordingDurationReached = false;
     _cancelDragProgress.value = 0;
     _pinnedVoiceLayout = _restingLayout;
     await _startRecording();
@@ -326,10 +339,31 @@ class _PromptInputState extends State<PromptInput> {
       // later transition will release the pin.
       setState(() => _pinnedVoiceLayout = null);
     } else if (_releaseRequestedDuringStart) {
-      // The hold ended while the recorder was still starting up — stop right
-      // away so recording never outlives the gesture.
-      await _stopAndTranscribe();
+      // The hold ended while the recorder was still starting up, leaving no
+      // meaningful captured duration to transcribe.
+      await _cancelVoiceInteraction();
     }
+  }
+
+  void _handleRecordPointerDown(PointerDownEvent event) {
+    if (_recordingPointer != null || (event.buttons & kPrimaryButton) == 0) return;
+    _recordingPointer = event.pointer;
+    _recordingPointerPosition = event.position;
+    unawaited(_handleRecordStart());
+  }
+
+  void _handleRecordPointerMove(PointerMoveEvent event) {
+    if (event.pointer != _recordingPointer) return;
+    _recordingPointerPosition = event.position;
+    _handleRecordDragUpdate(globalPosition: event.position);
+  }
+
+  void _handleRecordPointerEnd(PointerEvent event) {
+    if (event.pointer != _recordingPointer) return;
+    _handleRecordDragUpdate(globalPosition: event.position);
+    _recordingPointer = null;
+    _recordingPointerPosition = null;
+    unawaited(_handleRecordEnd());
   }
 
   /// Tracks the hold as it moves, scrubbing the drag-to-cancel presentation
@@ -356,15 +390,17 @@ class _PromptInputState extends State<PromptInput> {
 
   Future<void> _handleRecordEnd() async {
     if (_voiceState == _VoiceState.idle) {
-      // The release raced a recorder that is still starting up (or was a
-      // stray pointer event); [_handleRecordStart] consumes this after the
-      // start completes.
-      _releaseRequestedDuringStart = true;
+      // A release can race a recorder that is still starting up.
+      if (_isRecordStartInFlight) _releaseRequestedDuringStart = true;
       return;
     }
     if (_voiceState != _VoiceState.recording) return;
     if (_cancelDragProgress.value >= 1) {
       // Released on the cancel target — discard instead of transcribing.
+      await _cancelVoiceInteraction();
+      return;
+    }
+    if (!_minimumRecordingDurationReached) {
       await _cancelVoiceInteraction();
       return;
     }
@@ -387,7 +423,26 @@ class _PromptInputState extends State<PromptInput> {
     try {
       await _voiceService.startRecording();
       if (!mounted) return;
+      final interactionId = _voiceInteractionId;
       setState(() => _voiceState = _VoiceState.recording);
+      // Startup can finish after the user has already dragged toward cancel.
+      // Reapply the latest position once the newly mounted target has layout.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final position = _recordingPointerPosition;
+        if (!mounted ||
+            _voiceState != _VoiceState.recording ||
+            interactionId != _voiceInteractionId ||
+            _recordingPointer == null ||
+            position == null) {
+          return;
+        }
+        _handleRecordDragUpdate(globalPosition: position);
+      });
+      _minimumRecordingDurationTimer = Timer(_minimumRecordingDuration, () {
+        if (_voiceState == _VoiceState.recording && interactionId == _voiceInteractionId) {
+          _minimumRecordingDurationReached = true;
+        }
+      });
     } on MicrophonePermissionDeniedError {
       if (!mounted) return;
       _showVoiceError(context.loc.voiceErrorPermission);
@@ -407,6 +462,8 @@ class _PromptInputState extends State<PromptInput> {
     // long before a slow upload errors out); every continuation below is a
     // no-op once a newer interaction owns the composer.
     final interactionId = _voiceInteractionId;
+    _minimumRecordingDurationTimer?.cancel();
+    _minimumRecordingDurationTimer = null;
     setState(() {
       _voiceState = _VoiceState.transcribing;
       _cancelDragProgress.value = 0;
@@ -478,6 +535,9 @@ class _PromptInputState extends State<PromptInput> {
     // transcribe the recording being discarded. The id bump orphans any
     // still-pending transcription continuation of this interaction.
     _voiceInteractionId++;
+    _minimumRecordingDurationTimer?.cancel();
+    _minimumRecordingDurationTimer = null;
+    _minimumRecordingDurationReached = false;
     setState(() {
       _voiceState = _VoiceState.idle;
       _pinnedVoiceLayout = null;
@@ -1102,7 +1162,7 @@ class _PromptInputState extends State<PromptInput> {
 
   /// Wraps a resting pill's centre in the press-and-hold recording gesture.
   ///
-  /// The detector wraps the voice-aware slot (not the other way around) so it
+  /// The listener wraps the voice-aware slot (not the other way around) so it
   /// stays mounted when the waveform swaps in and still receives the release
   /// that ends the hold. Semantic taps toggle recording — assistive
   /// technologies cannot express the press-and-hold gesture.
@@ -1115,18 +1175,12 @@ class _PromptInputState extends State<PromptInput> {
       excludeSemantics: true,
       onTap: _handleSemanticRecordToggle,
       child: Listener(
-        // A pointer cancel mid-hold (incoming call, system gesture) resets
-        // the accepted long-press silently — no onLongPressEnd — so the raw
-        // pointer stream is the only place to keep the recording bounded by
-        // the gesture.
-        onPointerCancel: (_) => _handleRecordEnd(),
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onLongPressStart: (_) => _handleRecordStart(),
-          onLongPressMoveUpdate: (details) => _handleRecordDragUpdate(globalPosition: details.globalPosition),
-          onLongPressEnd: (_) => _handleRecordEnd(),
-          child: child,
-        ),
+        behavior: HitTestBehavior.opaque,
+        onPointerDown: _handleRecordPointerDown,
+        onPointerMove: _handleRecordPointerMove,
+        onPointerUp: _handleRecordPointerEnd,
+        onPointerCancel: _handleRecordPointerEnd,
+        child: child,
       ),
     );
   }
@@ -1207,29 +1261,24 @@ class _PromptInputState extends State<PromptInput> {
 
     // No Tooltip here: its long-press trigger would race the recording hold.
     // The button keeps its enabled look and swallows plain taps via
-    // [_ignoreTap]; holds outlast the tap recognizer, so the surrounding
-    // detector wins the arena and drives the recording. Semantic taps toggle
-    // recording — assistive technologies cannot express the hold.
+    // [_ignoreTap]; the surrounding raw pointer listener drives recording.
+    // Semantic taps toggle recording because assistive technologies cannot
+    // express the hold.
     return Semantics(
       button: true,
       label: loc.voiceRecord,
       excludeSemantics: true,
       onTap: _handleSemanticRecordToggle,
       child: Listener(
-        // A pointer cancel mid-hold resets the accepted long-press silently —
-        // no onLongPressEnd — so the raw pointer stream is the only place to
-        // keep the recording bounded by the gesture.
-        onPointerCancel: (_) => _handleRecordEnd(),
-        child: GestureDetector(
-          onLongPressStart: (_) => _handleRecordStart(),
-          onLongPressMoveUpdate: (details) => _handleRecordDragUpdate(globalPosition: details.globalPosition),
-          onLongPressEnd: (_) => _handleRecordEnd(),
-          child: const PregoButtonsSolid.iconOnly(
-            leadingIcon: TablerRegular.microphone,
-            hierarchy: PregoButtonsSolidHierarchy.secondary,
-            size: PregoButtonsSolidSize.lg,
-            onPressed: _ignoreTap,
-          ),
+        onPointerDown: _handleRecordPointerDown,
+        onPointerMove: _handleRecordPointerMove,
+        onPointerUp: _handleRecordPointerEnd,
+        onPointerCancel: _handleRecordPointerEnd,
+        child: const PregoButtonsSolid.iconOnly(
+          leadingIcon: TablerRegular.microphone,
+          hierarchy: PregoButtonsSolidHierarchy.secondary,
+          size: PregoButtonsSolidSize.lg,
+          onPressed: _ignoreTap,
         ),
       ),
     );
