@@ -611,6 +611,7 @@ void main() {
           agentName: null,
           attempt: null,
           retryError: null,
+          attachment: null,
         ),
       );
       final status = BridgeSseSessionStatus(

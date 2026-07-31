@@ -554,6 +554,7 @@ MessageWithParts testMessageWithParts({String? id}) {
         agentName: null,
         attempt: null,
         retryError: null,
+        attachment: null,
       ),
     ],
   );
