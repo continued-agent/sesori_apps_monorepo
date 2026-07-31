@@ -88,9 +88,10 @@ class AdaptiveSessionRouterTestHarness {
     when(() => projectRepository.listProjects()).thenAnswer((_) async => ApiResponse.success(const Projects(data: [])));
     when(pluginRepository.listPlugins).thenAnswer(
       (_) async => ApiResponse.success(
-        const PluginListResponse(
+        PluginDiscoverySnapshot(
           bridgeId: null,
-          plugins: [
+          supportsSessionOptions: false,
+          plugins: const [
             PluginMetadata(
               id: "plugin-1",
               displayName: "Plugin One",
@@ -228,6 +229,12 @@ class AdaptiveSessionRouterTestHarness {
     getIt.registerSingleton<RegisteredBridgesService>(registeredBridgesService);
     getIt.registerSingleton<SessionService>(SessionService(repository: sessionRepository));
     getIt.registerSingleton<SessionRepository>(sessionRepository);
+    getIt.registerSingleton<NewSessionOptionsService>(
+      NewSessionOptionsService(
+        sessionRepository: sessionRepository,
+        defaultModelSelector: const DefaultModelSelector(),
+      ),
+    );
     getIt.registerSingleton<ConnectionService>(connectionService);
     getIt.registerSingleton<SseEventTracker>(sseEventTracker);
     getIt.registerSingleton<SessionUnseenTracker>(FakeSessionUnseenTracker());

@@ -1,4 +1,5 @@
 import "package:collection/collection.dart";
+import "package:freezed_annotation/freezed_annotation.dart";
 import "package:injectable/injectable.dart";
 import "package:sesori_auth/sesori_auth.dart";
 import "package:sesori_shared/sesori_shared.dart";
@@ -9,32 +10,26 @@ import "../utils/model_filter/default_model_selector.dart";
 import "models/new_session_options_source.dart";
 import "models/new_session_selection_intent.dart";
 
-final class NewSessionOptionsData {
-  NewSessionOptionsData({
+part "new_session_options_service.freezed.dart";
+
+@Freezed()
+sealed class NewSessionOptionsData with _$NewSessionOptionsData {
+  const factory NewSessionOptionsData({
     required List<AgentInfo> agents,
     required List<ProviderInfo> providers,
     required List<CommandInfo> commands,
-    required this.selectedAgent,
-    required this.selectedAgentModel,
-    required this.stagedCommand,
+    required String? selectedAgent,
+    required AgentModel? selectedAgentModel,
+    required CommandInfo? stagedCommand,
     required List<SessionVariant> availableVariants,
-  }) : agents = List.unmodifiable(agents),
-       providers = List.unmodifiable(providers),
-       commands = List.unmodifiable(commands),
-       availableVariants = List.unmodifiable(availableVariants);
-
-  final List<AgentInfo> agents;
-  final List<ProviderInfo> providers;
-  final List<CommandInfo> commands;
-  final String? selectedAgent;
-  final AgentModel? selectedAgentModel;
-  final CommandInfo? stagedCommand;
-  final List<SessionVariant> availableVariants;
+  }) = _NewSessionOptionsData;
 }
 
 sealed class NewSessionOptionsLoadResult {
   const NewSessionOptionsLoadResult();
 }
+
+enum NewSessionOptionsLoadMode { cached, refresh }
 
 final class NewSessionOptionsLoaded extends NewSessionOptionsLoadResult {
   const NewSessionOptionsLoaded({required this.options, required this.source});
@@ -51,17 +46,18 @@ final class NewSessionOptionsUnavailable extends NewSessionOptionsLoadResult {
   const NewSessionOptionsUnavailable();
 }
 
-final class NewSessionOptionsLoadFailure extends NewSessionOptionsLoadResult {
-  const NewSessionOptionsLoadFailure({required this.error, required this.source});
+final class NewSessionOptionsFailureRetained extends NewSessionOptionsLoadResult {
+  const NewSessionOptionsFailureRetained({required this.options, required this.source});
 
-  final ApiError error;
+  final NewSessionOptionsData options;
   final NewSessionOptionsSource source;
 }
 
-final class NewSessionOptionsRefreshFailureRetained extends NewSessionOptionsLoadResult {
-  const NewSessionOptionsRefreshFailureRetained({required this.options});
+final class NewSessionOptionsFailureUnavailable extends NewSessionOptionsLoadResult {
+  const NewSessionOptionsFailureUnavailable({required this.error, required this.source});
 
-  final NewSessionOptionsData options;
+  final ApiError error;
+  final NewSessionOptionsSource source;
 }
 
 final class NewSessionOptionsRefreshFailureUnavailable extends NewSessionOptionsLoadResult {
@@ -83,12 +79,16 @@ class NewSessionOptionsService {
     required String projectId,
     required String pluginId,
     required NewSessionOptionsSource source,
-    required bool refresh,
+    required NewSessionOptionsLoadMode mode,
     required NewSessionSelectionIntent? restoredSelection,
     required NewSessionOptionsData? previousOptions,
   }) async {
     if (source == NewSessionOptionsSource.legacy) {
-      if (!refresh) return const NewSessionOptionsUnsupported();
+      if (mode == NewSessionOptionsLoadMode.cached) {
+        return previousOptions == null
+            ? const NewSessionOptionsUnsupported()
+            : NewSessionOptionsLoaded(options: previousOptions, source: NewSessionOptionsSource.legacy);
+      }
       return _loadLegacy(
         projectId: projectId,
         pluginId: pluginId,
@@ -100,7 +100,7 @@ class NewSessionOptionsService {
     final result = await _sessionRepository.loadSessionOptions(
       projectId: projectId,
       pluginId: pluginId,
-      refresh: refresh,
+      refresh: mode == NewSessionOptionsLoadMode.refresh,
     );
     return switch (result) {
       SessionOptionsRepositoryAvailable(:final catalog) => NewSessionOptionsLoaded(
@@ -112,18 +112,22 @@ class NewSessionOptionsService {
         source: NewSessionOptionsSource.aggregate,
       ),
       SessionOptionsRepositoryCacheUnavailable() => const NewSessionOptionsUnavailable(),
-      SessionOptionsRepositoryProjectNotFound(:final error) => NewSessionOptionsLoadFailure(
+      SessionOptionsRepositoryProjectNotFound(:final error) => NewSessionOptionsFailureUnavailable(
         error: error,
         source: NewSessionOptionsSource.aggregate,
       ),
       SessionOptionsRepositoryRefreshFailedRetained() =>
         previousOptions == null
             ? const NewSessionOptionsRefreshFailureUnavailable()
-            : NewSessionOptionsRefreshFailureRetained(options: previousOptions),
+            : NewSessionOptionsFailureRetained(
+                options: previousOptions,
+                source: NewSessionOptionsSource.aggregate,
+              ),
       SessionOptionsRepositoryRefreshFailedUnavailable() => const NewSessionOptionsRefreshFailureUnavailable(),
-      SessionOptionsRepositoryFailure(:final error) => NewSessionOptionsLoadFailure(
+      SessionOptionsRepositoryFailure(:final error) => _transientFailure(
         error: error,
         source: NewSessionOptionsSource.aggregate,
+        previousOptions: previousOptions,
       ),
     };
   }
@@ -143,12 +147,21 @@ class NewSessionOptionsService {
         ),
         source: NewSessionOptionsSource.legacy,
       ),
-      LegacySessionOptionsRepositoryFailure(:final error) => NewSessionOptionsLoadFailure(
+      LegacySessionOptionsRepositoryFailure(:final error) => _transientFailure(
         error: error,
         source: NewSessionOptionsSource.legacy,
+        previousOptions: previousOptions,
       ),
     };
   }
+
+  NewSessionOptionsLoadResult _transientFailure({
+    required ApiError error,
+    required NewSessionOptionsSource source,
+    required NewSessionOptionsData? previousOptions,
+  }) => previousOptions == null
+      ? NewSessionOptionsFailureUnavailable(error: error, source: source)
+      : NewSessionOptionsFailureRetained(options: previousOptions, source: source);
 
   NewSessionOptionsData _resolve({
     required SessionOptionsCatalog catalog,
@@ -223,11 +236,27 @@ class NewSessionOptionsService {
     };
   }
 
-  NewSessionOptionsData? selectAgent({required NewSessionOptionsData options, required String agent}) {
+  NewSessionOptionsData? selectAgent({
+    required NewSessionOptionsData options,
+    required String agent,
+    required NewSessionSelectionIntent? selectionIntent,
+  }) {
     final agentInfo = options.agents.firstWhereOrNull((item) => item.name == agent);
     if (agentInfo == null) return null;
-    final selectedAgentModel =
-        _validatedModel(providers: options.providers, model: agentInfo.model) ?? options.selectedAgentModel;
+    final modelIntent = selectionIntent?.model;
+    final selectedAgentModel = _applyVariantIntent(
+      providers: options.providers,
+      model:
+          _validatedModel(
+            providers: options.providers,
+            model: modelIntent == null
+                ? null
+                : AgentModel(providerID: modelIntent.providerId, modelID: modelIntent.modelId, variant: null),
+          ) ??
+          _validatedModel(providers: options.providers, model: agentInfo.model) ??
+          options.selectedAgentModel,
+      variantIntent: selectionIntent?.variant,
+    );
     return NewSessionOptionsData(
       agents: options.agents,
       providers: options.providers,
@@ -243,6 +272,7 @@ class NewSessionOptionsService {
     required NewSessionOptionsData options,
     required String providerId,
     required String modelId,
+    required NewSessionVariantIntent? variantIntent,
   }) {
     final requested = AgentModel(providerID: providerId, modelID: modelId, variant: null);
     if (_validatedModel(providers: options.providers, model: requested) == null) return null;
@@ -260,7 +290,11 @@ class NewSessionOptionsService {
         : agentVariant != null && variants.any((variant) => variant.id == agentVariant)
         ? agentVariant
         : null;
-    final selectedAgentModel = requested.copyWith(variant: selectedVariant);
+    final selectedAgentModel = _applyVariantIntent(
+      providers: options.providers,
+      model: requested.copyWith(variant: selectedVariant),
+      variantIntent: variantIntent,
+    );
 
     return NewSessionOptionsData(
       agents: options.agents,

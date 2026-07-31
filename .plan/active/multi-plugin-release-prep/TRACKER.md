@@ -2,11 +2,11 @@
 
 ## Current State
 
-- **Implementation base:** `origin/main` at `42f3bc44`
-- **Series state:** Steps 1/6 through 4.F/6 are merged; oversized PR #620 is
+- **Implementation base:** `origin/main` at `c662a639`
+- **Series state:** Steps 1/6 through 5.A/6 are merged; oversized PR #620 is
   closed, with its frozen branch retained only as the split implementation source
-- **Current step:** Step 5.A/6 — cached session-option client layers
-- **Next action:** commit, push, and open the verified Step 5.A/6 implementation
+- **Current step:** Step 5.B/6 — cached New Session composer
+- **Next action:** monitor PR #636 against `main` through review and CI
 
 ## Delivery
 
@@ -21,8 +21,8 @@
 | [x] | Step 4.D/6 — capture/persistence repository | `multi-plugin-release-prep-cache-repository` | PR #626 merged |
 | [x] | Step 4.E/6 — cache policy/coalescing service | `multi-plugin-release-prep-cache-service` | PR #627 merged |
 | [x] | Step 4.F/6 — route, listeners, and lifecycle wiring | `multi-plugin-release-prep-cache-route` | PR #630 merged |
-| [ ] | Step 5.A/6 — cached session-option client layers | `multi-plugin-release-prep-client-options` | Verified; ready to open |
-| [ ] | Step 5.B/6 — cached New Session composer | `multi-plugin-release-prep-client-options-ui` | Implemented locally; blocked on Step 5.A delivery |
+| [x] | Step 5.A/6 — cached session-option client layers | `multi-plugin-release-prep-client-options` | PR #635 merged |
+| [ ] | Step 5.B/6 — cached New Session composer | `multi-plugin-release-prep-client-options-ui` | [PR #636](https://github.com/sesori-ai/sesori_apps_monorepo/pull/636) open against `main` |
 | [ ] | Step 6/6 — consolidated Harnesses settings | `multi-plugin-release-prep-harness-settings` | Blocked on Step 5.B merge |
 
 ## Locked Decisions
@@ -217,4 +217,57 @@
   catalogs/error mapping, provider-cache removal, legacy three-route mapping,
   option policy service, neutral source/intent models, and DI registration. All
   22 focused API/repository/service tests passed, as did fatal analysis in
+  module-core, mobile, and desktop plus `git diff --check`. Committed as
+  `cff67af4`, pushed, opened as PR #635, and merged to `main` as `0352553d`.
+- Step 5.B/6 preparation (2026-07-31): isolated repository-mapped plugin source,
+  independent agent/model/variant intent tracking, composed source-aware cubit
+  state, reconnect/plugin-switch generation fencing, and cached/legacy/refresh
+  mobile presentation. All 101 focused plugin/service/tracker/cubit tests and 27
+  mobile New Session tests passed, as did fatal analysis in module-core, mobile,
+  and desktop plus `git diff --check`.
+- Step 5.B/6 delivery (2026-07-31): committed as `e62e1d7a`, pushed, and opened
+  as stacked PR #636 against the Step 5.A branch. After PR #635 merged, GitHub
+  retargeted PR #636 to `main`; the updated base is merged into the branch.
+- Step 5.B/6 review hardening (2026-07-31): bridge-affinity fencing now covers
+  failed rediscovery and reconnects during in-flight creation; backend-local
+  intent resets on bridge changes; agent/model actions preserve independent
+  model/variant intent; and caught refresh failures retain both usable options
+  and their aggregate or legacy source. Merged `main` at `c662a639`, preserving
+  its composer-draft and product-analytics changes. All 111 focused core tests
+  and 27 mobile New Session tests passed, as did fatal analysis in module-core,
+  mobile, and desktop plus `git diff --check`.
+- Step 5.B/6 equality follow-up (2026-07-31): converted the option-load variants
+  and nested option snapshot to Freezed value types so equivalent option payloads
+  participate in `NewSessionState` equality and hashing. The 77 directly affected
+  core tests and 27 mobile New Session tests passed, as did fatal analysis in
   module-core, mobile, and desktop plus `git diff --check`.
+- Step 5.B/6 typed-failure follow-up (2026-07-31): typed legacy refresh
+  failures now retain prior options and staged commands while surfacing the
+  refresh failure. All 34 plugin-selection tests passed, as did fatal analysis
+  in module-core, mobile, and desktop.
+- Step 5.B/6 reconnect-retention follow-up (2026-07-31): same-bridge aggregate
+  reload failures retain the prior option snapshot, while same-bridge legacy
+  rediscovery reuses its explicitly loaded snapshot without calling legacy
+  routes again. All 44 affected core tests passed, as did fatal analysis in
+  module-core, mobile, and desktop.
+- Step 5.B/6 affinity-fence follow-up (2026-07-31): retained options now require
+  a verified non-null bridge identity, matching option source, and a still-valid
+  project; failed rediscovery also disables creation in both the cubit and UI.
+  All 83 focused core tests and 27 mobile New Session tests passed, as did fatal
+  analysis in module-core, mobile, and desktop plus `git diff --check`.
+- Step 5.B/6 unidentified-scope follow-up (2026-07-31): re-establishing an
+  unidentified bridge scope now clears backend-local selection intent as well
+  as cached options. The directly affected tracker and reconnect tests passed,
+  as did fatal module-core analysis and `git diff --check`.
+- Step 5.B/6 affinity architecture cleanup (2026-07-31): replaced the mutable
+  bridge-ID/affinity pair with a Freezed backend-scope state and sealed scope
+  transition shared by option retention and selection intent. Backend scope is
+  now emitted in `NewSessionState`, so disconnects immediately disable UI and
+  cubit backend actions. Option loading uses a closed mode enum and authoritative
+  retained/unavailable service outcomes rather than cubit-side typed-failure
+  policy. All 102 focused core tests and 27 mobile New Session tests passed, as
+  did fatal analysis in module-core, mobile, and desktop plus `git diff --check`.
+- Step 5.B/6 retained-status copy follow-up (2026-07-31): retained failures now
+  use mode-neutral “couldn’t update” guidance so automatic cached reload failures
+  are not presented as failed user refreshes. The focused widget test, fatal
+  mobile analysis, and `git diff --check` passed.
