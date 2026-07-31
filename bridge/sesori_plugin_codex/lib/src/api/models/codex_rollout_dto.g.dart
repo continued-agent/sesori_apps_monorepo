@@ -86,22 +86,53 @@ const _$CodexRolloutRoleEnumMap = {
   CodexRolloutRole.unknown: 'unknown',
 };
 
-_CodexRolloutContentDto _$CodexRolloutContentDtoFromJson(Map json) =>
-    _CodexRolloutContentDto(
-      type: $enumDecodeNullable(
-        _$CodexRolloutContentTypeEnumMap,
-        json['type'],
-        unknownValue: CodexRolloutContentType.unknown,
-      ),
-      text: json['text'] as String?,
+CodexRolloutInputTextDto _$CodexRolloutInputTextDtoFromJson(Map json) =>
+    CodexRolloutInputTextDto(
+      text: json['text'] as String,
+      $type: json['type'] as String?,
     );
 
-const _$CodexRolloutContentTypeEnumMap = {
-  CodexRolloutContentType.inputText: 'input_text',
-  CodexRolloutContentType.outputText: 'output_text',
-  CodexRolloutContentType.summaryText: 'summary_text',
-  CodexRolloutContentType.unknown: 'unknown',
-};
+Map<String, dynamic> _$CodexRolloutInputTextDtoToJson(
+  CodexRolloutInputTextDto instance,
+) => <String, dynamic>{'text': instance.text, 'type': instance.$type};
+
+CodexRolloutOutputTextDto _$CodexRolloutOutputTextDtoFromJson(Map json) =>
+    CodexRolloutOutputTextDto(
+      text: json['text'] as String,
+      $type: json['type'] as String?,
+    );
+
+Map<String, dynamic> _$CodexRolloutOutputTextDtoToJson(
+  CodexRolloutOutputTextDto instance,
+) => <String, dynamic>{'text': instance.text, 'type': instance.$type};
+
+CodexRolloutSummaryTextDto _$CodexRolloutSummaryTextDtoFromJson(Map json) =>
+    CodexRolloutSummaryTextDto(
+      text: json['text'] as String,
+      $type: json['type'] as String?,
+    );
+
+Map<String, dynamic> _$CodexRolloutSummaryTextDtoToJson(
+  CodexRolloutSummaryTextDto instance,
+) => <String, dynamic>{'text': instance.text, 'type': instance.$type};
+
+CodexRolloutInputImageDto _$CodexRolloutInputImageDtoFromJson(Map json) =>
+    CodexRolloutInputImageDto(
+      imageUrl: json['image_url'] as String,
+      $type: json['type'] as String?,
+    );
+
+Map<String, dynamic> _$CodexRolloutInputImageDtoToJson(
+  CodexRolloutInputImageDto instance,
+) => <String, dynamic>{'image_url': instance.imageUrl, 'type': instance.$type};
+
+CodexRolloutUnknownContentDto _$CodexRolloutUnknownContentDtoFromJson(
+  Map json,
+) => CodexRolloutUnknownContentDto($type: json['type'] as String?);
+
+Map<String, dynamic> _$CodexRolloutUnknownContentDtoToJson(
+  CodexRolloutUnknownContentDto instance,
+) => <String, dynamic>{'type': instance.$type};
 
 _CodexRolloutActionDto _$CodexRolloutActionDtoFromJson(Map json) =>
     _CodexRolloutActionDto(query: json['query'] as String?);
