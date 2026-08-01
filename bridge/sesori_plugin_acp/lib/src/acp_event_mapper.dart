@@ -7,6 +7,7 @@ import "acp_session_configuration_tracker.dart";
 import "acp_stdio_client.dart";
 import "repositories/mappers/acp_content_mapper.dart";
 import "repositories/trackers/acp_content_tracker.dart";
+import "repositories/trackers/acp_tool_content_tracker.dart";
 
 /// A backend "halt notice": the agent ended a turn without doing the requested
 /// work and instead streamed a terminal notice telling the user to change
@@ -174,7 +175,7 @@ class AcpEventMapper {
 
   /// sessionId -> (toolCallId -> last-rendered live tool state). ACP
   /// `tool_call_update` notifications are partial, so this preserves the tool's
-  /// name/title/status/output across updates that omit them. Nested (not a
+  /// name/title/status/content across updates that omit them. Nested (not a
   /// composite "sessionId:toolCallId" key) so cleanup is exact regardless of
   /// characters in the opaque agent-supplied ids.
   final Map<String, Map<String, _LiveTool>> _liveTools = {};
@@ -628,32 +629,45 @@ class AcpEventMapper {
   }) {
     final toolCallId = update["toolCallId"] as String?;
     if (toolCallId == null || toolCallId.isEmpty) return const [];
-    if (_liveTools[sessionId]?[toolCallId] == null) {
+    final prior = _liveTools[sessionId]?[toolCallId];
+    if (prior == null) {
       _closeCurrentIdlessAssistantContent(sessionId: sessionId);
     }
     final messageId = "$sessionId-tool-$toolCallId";
-    final content = _contentMapper.toolContent(update: update);
+    final contentMutation = _contentMapper.toolContent(update: update);
+    final contentTracker = prior?.contentTracker ?? AcpToolContentTracker();
+    contentTracker.applyInitial(mutation: contentMutation);
+    final hasKind = update["kind"] is String && (update["kind"] as String).isNotEmpty;
+    final mappedStatus = _contentMapper.toolStatus(status: update["status"]);
+    final useCallTool = prior == null || (!prior.hasExplicitKind && (hasKind || prior.tool == "tool"));
     final state = _LiveTool(
       // Fail-soft like the tool name and `_toolCallUpdate`'s title: a non-string
       // title (schema drift / malformed agent data) renders as null rather than
       // throwing and aborting the notification.
-      tool: _contentMapper.toolName(update: update),
-      title: update["title"] is String ? update["title"] as String? : null,
-      status: _contentMapper.toolStatus(status: update["status"]),
-      output: content.output,
-      isFileMutation: _isFileMutation(update: update, content: content),
-      diffEmitted: false,
+      tool: useCallTool ? _contentMapper.toolName(update: update) : prior.tool,
+      title: prior?.title ?? (update["title"] is String ? update["title"] as String? : null),
+      status: prior?.hasExplicitStatus ?? false ? prior!.status : mappedStatus ?? PluginToolStatus.pending,
+      contentTracker: contentTracker,
+      isFileMutation:
+          (prior?.isFileMutation ?? false) ||
+          _isFileMutation(
+            update: update,
+            contentMutation: contentMutation,
+          ),
+      diffEmitted: prior?.diffEmitted ?? false,
+      hasExplicitKind: (prior?.hasExplicitKind ?? false) || hasKind,
+      hasExplicitStatus: (prior?.hasExplicitStatus ?? false) || mappedStatus != null,
     );
     (_liveTools[sessionId] ??= {})[toolCallId] = state;
     final events = <BridgeSseEvent>[
-      _toolEnvelope(sessionId: sessionId, messageId: messageId),
+      if (prior == null) _toolEnvelope(sessionId: sessionId, messageId: messageId),
       _toolPartEvent(sessionId: sessionId, messageId: messageId, state: state),
     ];
     _appendCompletedMutationDiff(
       events: events,
       sessionId: sessionId,
       state: state,
-      mutationAvailable: content.mutation == AcpToolContentMutation.diff,
+      mutationAvailable: _reportsDiff(mutation: contentMutation),
     );
     return events;
   }
@@ -667,7 +681,7 @@ class AcpEventMapper {
     final messageId = "$sessionId-tool-$toolCallId";
     // A `tool_call_update` is a PARTIAL update: an agent may send only the
     // changed fields (e.g. `{status: completed}`). Merge onto the tool's prior
-    // state so an omitted name/title/output/status isn't reset to a default,
+    // state so omitted name/title/content/status fields aren't reset to defaults,
     // which would blank an existing tool card. Mirrors the replay collector,
     // which already merges — keeping live and history renderings consistent.
     final prior = _liveTools[sessionId]?[toolCallId];
@@ -679,18 +693,26 @@ class AcpEventMapper {
     // the title text (`title` lives separately in PluginToolState.title). This
     // matches the replay collector, which preserves the original tool name.
     final hasKind = update["kind"] is String && (update["kind"] as String).isNotEmpty;
-    final content = _contentMapper.toolContent(update: update);
+    final contentMutation = _contentMapper.toolContent(update: update);
+    final contentTracker = prior?.contentTracker ?? AcpToolContentTracker();
+    contentTracker.apply(mutation: contentMutation);
+    final mappedStatus = _contentMapper.toolStatus(status: update["status"]);
     final state = _LiveTool(
       tool: hasKind
           ? _contentMapper.toolName(update: update)
           : (prior?.tool ?? _contentMapper.toolName(update: update)),
       title: update.containsKey("title") && update["title"] is String ? update["title"] as String? : prior?.title,
-      status: update.containsKey("status")
-          ? _contentMapper.toolStatus(status: update["status"])
-          : (prior?.status ?? PluginToolStatus.pending),
-      output: content.output ?? prior?.output,
-      isFileMutation: (prior?.isFileMutation ?? false) || _isFileMutation(update: update, content: content),
+      status: mappedStatus ?? prior?.status ?? PluginToolStatus.pending,
+      contentTracker: contentTracker,
+      isFileMutation:
+          (prior?.isFileMutation ?? false) ||
+          _isFileMutation(
+            update: update,
+            contentMutation: contentMutation,
+          ),
       diffEmitted: prior?.diffEmitted ?? false,
+      hasExplicitKind: (prior?.hasExplicitKind ?? false) || hasKind,
+      hasExplicitStatus: (prior?.hasExplicitStatus ?? false) || mappedStatus != null,
     );
     final events = <BridgeSseEvent>[
       // ACP events can be reordered (reconnect / resume / replay), so a
@@ -709,7 +731,7 @@ class AcpEventMapper {
       events: events,
       sessionId: sessionId,
       state: state,
-      mutationAvailable: content.mutation == AcpToolContentMutation.diff,
+      mutationAvailable: _reportsDiff(mutation: contentMutation),
     );
     return events;
   }
@@ -748,6 +770,7 @@ class AcpEventMapper {
     required String messageId,
     required _LiveTool state,
   }) {
+    final content = state.contentTracker.snapshot;
     return BridgeSseMessagePartUpdated(
       part: _toolPart(
         partId: "$messageId-call",
@@ -757,9 +780,9 @@ class AcpEventMapper {
         state: PluginToolState(
           status: state.status,
           title: state.title,
-          output: state.output,
-          error: state.status == PluginToolStatus.error ? state.output : null,
-          attachments: const [],
+          output: content.output,
+          error: state.status == PluginToolStatus.error ? content.output : null,
+          attachments: content.attachments,
         ),
       ),
     );
@@ -881,11 +904,18 @@ class AcpEventMapper {
   /// shape, with a non-mutating or absent kind).
   bool _isFileMutation({
     required Map<String, dynamic> update,
-    required AcpMappedToolContent content,
+    required AcpToolContentMutation contentMutation,
   }) {
     final kind = update["kind"];
     if (kind == "edit" || kind == "delete" || kind == "move") return true;
-    return content.mutation == AcpToolContentMutation.diff;
+    return _reportsDiff(mutation: contentMutation);
+  }
+
+  bool _reportsDiff({required AcpToolContentMutation mutation}) {
+    return switch (mutation) {
+      AcpReplaceToolContentMutation(:final hasDiff) => hasDiff,
+      AcpUpdateToolOutputMutation() || AcpUnchangedToolContentMutation() => false,
+    };
   }
 
   void _appendCompletedMutationDiff({
@@ -897,7 +927,7 @@ class AcpEventMapper {
     if (!state.isFileMutation || state.diffEmitted) {
       return;
     }
-    if (!mutationAvailable && !_isTerminalToolStatus(state.status)) {
+    if (!_isTerminalToolStatus(state.status) && (!mutationAvailable || state.hasExplicitStatus)) {
       return;
     }
     state.diffEmitted = true;
@@ -934,15 +964,19 @@ class _LiveTool {
     required this.tool,
     required this.title,
     required this.status,
-    required this.output,
+    required this.contentTracker,
     required this.isFileMutation,
     required this.diffEmitted,
+    required this.hasExplicitKind,
+    required this.hasExplicitStatus,
   });
 
   final String tool;
   final String? title;
   final PluginToolStatus status;
-  final String? output;
+  final AcpToolContentTracker contentTracker;
   final bool isFileMutation;
   bool diffEmitted;
+  final bool hasExplicitKind;
+  final bool hasExplicitStatus;
 }

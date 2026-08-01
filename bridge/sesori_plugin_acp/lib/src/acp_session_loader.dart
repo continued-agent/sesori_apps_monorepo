@@ -3,6 +3,7 @@ import "package:sesori_plugin_interface/sesori_plugin_interface.dart";
 import "acp_event_mapper.dart" show AcpHaltNotice;
 import "repositories/mappers/acp_content_mapper.dart";
 import "repositories/trackers/acp_content_tracker.dart";
+import "repositories/trackers/acp_tool_content_tracker.dart";
 
 /// Accumulates the `session/update` notifications replayed by `session/load`
 /// into ordered [PluginMessageWithParts] for `getSessionMessages`.
@@ -63,28 +64,52 @@ class AcpReplayCollector {
       case "tool_call":
         final id = update["toolCallId"] as String?;
         if (id == null) return;
-        final content = _contentMapper.toolContent(update: update);
-        _assistantForTool().tools[id] = _ToolDraft(
-          tool: _contentMapper.toolName(update: update),
-          title: _toolTitle(update),
-          status: _contentMapper.toolStatus(status: update["status"]),
-          output: content.output,
-        );
+        final contentMutation = _contentMapper.toolContent(update: update).withoutImagePayload();
+        final draft = _findTool(id);
+        final hasKind = update["kind"] is String && (update["kind"] as String).isNotEmpty;
+        final mappedStatus = _contentMapper.toolStatus(status: update["status"]);
+        if (draft == null) {
+          final contentTracker = AcpToolContentTracker()..applyInitial(mutation: contentMutation);
+          _assistantForTool().tools[id] = _ToolDraft(
+            tool: _contentMapper.toolName(update: update),
+            title: _toolTitle(update),
+            status: mappedStatus ?? PluginToolStatus.pending,
+            contentTracker: contentTracker,
+            hasExplicitKind: hasKind,
+            hasExplicitStatus: mappedStatus != null,
+          );
+        } else {
+          if (!draft.hasExplicitKind && (hasKind || draft.tool == "tool")) {
+            draft.tool = _contentMapper.toolName(update: update);
+          }
+          draft.title ??= _toolTitle(update);
+          if (!draft.hasExplicitStatus && mappedStatus != null) {
+            draft.status = mappedStatus;
+          }
+          draft.contentTracker.applyInitial(mutation: contentMutation);
+          draft.hasExplicitKind = draft.hasExplicitKind || hasKind;
+          draft.hasExplicitStatus = draft.hasExplicitStatus || mappedStatus != null;
+        }
       case "tool_call_update":
         final id = update["toolCallId"] as String?;
         if (id == null) return;
-        final content = _contentMapper.toolContent(update: update);
+        final contentMutation = _contentMapper.toolContent(update: update).withoutImagePayload();
         final draft = _findTool(id);
+        final hasKind = update["kind"] is String && (update["kind"] as String).isNotEmpty;
+        final mappedStatus = _contentMapper.toolStatus(status: update["status"]);
         if (draft == null) {
           // No prior `tool_call` was replayed for this id (loaded history can
           // carry only the update). Seed a tool draft from the update payload so
           // the card still renders, mirroring the live mapper which emits a tool
           // part unconditionally.
+          final contentTracker = AcpToolContentTracker()..apply(mutation: contentMutation);
           _assistantForTool().tools[id] = _ToolDraft(
             tool: _contentMapper.toolName(update: update),
             title: _toolTitle(update),
-            status: _contentMapper.toolStatus(status: update["status"]),
-            output: content.output,
+            status: mappedStatus ?? PluginToolStatus.pending,
+            contentTracker: contentTracker,
+            hasExplicitKind: hasKind,
+            hasExplicitStatus: mappedStatus != null,
           );
           return;
         }
@@ -93,11 +118,16 @@ class AcpReplayCollector {
         // completed/failed replayed tool card back to pending (status) or drop a
         // separately-sent display title. Mirrors the live mapper's merge so
         // replayed history matches live rendering.
-        if (update.containsKey("status")) {
-          draft.status = _contentMapper.toolStatus(status: update["status"]);
+        if (mappedStatus != null) {
+          draft.status = mappedStatus;
+          draft.hasExplicitStatus = true;
+        }
+        if (hasKind) {
+          draft.tool = _contentMapper.toolName(update: update);
+          draft.hasExplicitKind = true;
         }
         if (update.containsKey("title")) draft.title = _toolTitle(update);
-        if (content.output != null) draft.output = content.output;
+        draft.contentTracker.apply(mutation: contentMutation);
     }
   }
 
@@ -187,6 +217,7 @@ class AcpReplayCollector {
       parts.add(_textPart(draft, entry.key, PluginMessagePartType.text, entry.value));
     }
     draft.tools.forEach((toolId, tool) {
+      final content = tool.contentTracker.snapshot;
       parts.add(
         PluginMessagePart(
           id: "${draft.id}-tool-$toolId",
@@ -198,8 +229,8 @@ class AcpReplayCollector {
           state: PluginToolState(
             status: tool.status,
             title: tool.title,
-            output: tool.output,
-            error: tool.status == PluginToolStatus.error ? tool.output : null,
+            output: content.output,
+            error: tool.status == PluginToolStatus.error ? content.output : null,
             attachments: const [],
           ),
           prompt: null,
@@ -410,12 +441,16 @@ class _ToolDraft {
     required this.tool,
     required this.title,
     required this.status,
-    required this.output,
+    required this.contentTracker,
+    required this.hasExplicitKind,
+    required this.hasExplicitStatus,
   });
 
-  final String tool;
+  String tool;
   // Reassigned as later tool_call_update notifications arrive during replay.
   String? title;
   PluginToolStatus status;
-  String? output;
+  final AcpToolContentTracker contentTracker;
+  bool hasExplicitKind;
+  bool hasExplicitStatus;
 }

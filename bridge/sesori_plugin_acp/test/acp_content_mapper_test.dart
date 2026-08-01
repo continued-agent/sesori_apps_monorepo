@@ -206,7 +206,7 @@ void main() {
       expect(mapper.toolStatus(status: "in_progress"), PluginToolStatus.running);
       expect(mapper.toolStatus(status: "completed"), PluginToolStatus.completed);
       expect(mapper.toolStatus(status: "failed"), PluginToolStatus.error);
-      expect(mapper.toolStatus(status: "future"), PluginToolStatus.pending);
+      expect(mapper.toolStatus(status: "future"), isNull);
     });
 
     test("maps typed tool content text and diff while ignoring terminal and unknown variants", () {
@@ -243,11 +243,56 @@ void main() {
         },
       );
 
-      expect(mapped.output, "one two");
-      expect(mapped.mutation, AcpToolContentMutation.diff);
+      expect(mapped, isA<AcpReplaceToolContentMutation>());
+      final replacement = mapped as AcpReplaceToolContentMutation;
+      expect(replacement.output, "one two");
+      expect(replacement.hasDiff, isTrue);
+      expect(replacement.imageCandidates, hasLength(1));
+      expect(replacement.imageCandidates.single, isA<AcpMappedInlineImageContentBlock>());
       expect(mapped.toString(), isNot(contains("private-terminal")));
       expect(mapped.toString(), isNot(contains("source.dart")));
       expect(mapped.toString(), isNot(contains("secret")));
+    });
+
+    test("bounds tool images before scanning trailing text and diff content", () {
+      late AcpReplaceToolContentMutation replacement;
+      final output = _captureWarnings(() {
+        replacement =
+            mapper.toolContent(
+                  update: {
+                    "content": [
+                      for (var index = 0; index < 5; index++)
+                        {
+                          "type": "content",
+                          "content": {
+                            "type": "image",
+                            "data": "AA==",
+                            "mimeType": "image/png",
+                            "uri": "file:///private/image-$index.png",
+                          },
+                        },
+                      {
+                        "type": "content",
+                        "content": {"type": "text", "text": "after images"},
+                      },
+                      {
+                        "type": "diff",
+                        "path": "/private/source.dart",
+                        "oldText": "old",
+                        "newText": "new",
+                      },
+                    ],
+                  },
+                )
+                as AcpReplaceToolContentMutation;
+      });
+
+      expect(replacement.imageCandidates, hasLength(4));
+      expect(replacement.output, "after images");
+      expect(replacement.hasDiff, isTrue);
+      expect("exceeds the count limit".allMatches(output), hasLength(1));
+      expect(output, isNot(contains("source.dart")));
+      expect(output, isNot(contains("image-4.png")));
     });
 
     test("preserves legacy tool text and bounded raw-output fallbacks", () {
@@ -260,54 +305,172 @@ void main() {
             ],
           },
         ),
-        isA<AcpMappedToolContent>()
+        isA<AcpReplaceToolContentMutation>()
             .having((content) => content.output, "output", "legacy")
-            .having((content) => content.mutation, "mutation", AcpToolContentMutation.diff),
+            .having((content) => content.hasDiff, "hasDiff", isTrue),
       );
       expect(
-        mapper
-            .toolContent(
-              update: {
-                "rawOutput": {"stdout": "out\n", "stderr": "error\n"},
-              },
-            )
+        (mapper.toolContent(
+                  update: {
+                    "rawOutput": {"stdout": "out\n", "stderr": "error\n"},
+                  },
+                )
+                as AcpUpdateToolOutputMutation)
             .output,
         "out\nerror",
       );
       expect(
-        mapper
-            .toolContent(
-              update: {
-                "rawOutput": {
-                  "content": {"type": "text", "text": "nested\n"},
-                },
-              },
-            )
+        (mapper.toolContent(
+                  update: {
+                    "rawOutput": {
+                      "content": {"type": "text", "text": "nested\n"},
+                    },
+                  },
+                )
+                as AcpUpdateToolOutputMutation)
             .output,
         "nested",
       );
       expect(
-        mapper
-            .toolContent(
-              update: {
-                "rawOutput": {"exitCode": 7},
-              },
-            )
+        (mapper.toolContent(
+                  update: {
+                    "rawOutput": {"exitCode": 7},
+                  },
+                )
+                as AcpUpdateToolOutputMutation)
             .output,
         "exited with code 7",
       );
 
       final oversized = "x" * (maxToolOutputLength + 1);
       expect(
-        mapper.toolContent(update: {"rawOutput": oversized}).output,
+        (mapper.toolContent(update: {"rawOutput": oversized}) as AcpUpdateToolOutputMutation).output,
         "${"x" * maxToolOutputLength}…",
       );
 
       final unicode = "${"x" * (maxToolOutputLength - 1)}😀z";
       expect(
-        mapper.toolContent(update: {"rawOutput": unicode}).output,
+        (mapper.toolContent(update: {"rawOutput": unicode}) as AcpUpdateToolOutputMutation).output,
         "${"x" * (maxToolOutputLength - 1)}😀…",
       );
+    });
+
+    test("distinguishes replacement, raw-output update, and omission", () {
+      expect(
+        mapper.toolContent(update: const {}),
+        isA<AcpUnchangedToolContentMutation>(),
+      );
+      expect(
+        mapper.toolContent(update: {"rawOutput": ""}),
+        isA<AcpUpdateToolOutputMutation>().having(
+          (mutation) => mutation.output,
+          "output",
+          isNull,
+        ),
+      );
+      expect(
+        mapper.toolContent(update: {"rawOutput": {"stdout": 42}}),
+        isA<AcpUnchangedToolContentMutation>(),
+      );
+      expect(
+        mapper.toolContent(update: {"rawOutput": {"content": 42}}),
+        isA<AcpUnchangedToolContentMutation>(),
+      );
+      expect(
+        mapper.toolContent(update: {"rawOutput": {"stdout": 42, "stderr": "usable"}}),
+        isA<AcpUpdateToolOutputMutation>().having(
+          (mutation) => mutation.output,
+          "output",
+          "usable",
+        ),
+      );
+      expect(
+        mapper.toolContent(update: {"content": const <Object?>[]}),
+        isA<AcpReplaceToolContentMutation>()
+            .having((mutation) => mutation.output, "output", isNull)
+            .having(
+              (mutation) => mutation.imageCandidates,
+              "imageCandidates",
+              isEmpty,
+            )
+            .having((mutation) => mutation.hasDiff, "hasDiff", isFalse),
+      );
+
+      final imageOnly =
+          mapper.toolContent(
+                update: {
+                  "content": [
+                    {
+                      "type": "content",
+                      "content": {
+                        "type": "image",
+                        "data": "AA==",
+                        "mimeType": "image/png",
+                        "uri": null,
+                      },
+                    },
+                  ],
+                },
+              )
+              as AcpReplaceToolContentMutation;
+      expect(imageOnly.output, isNull);
+      expect(imageOnly.imageCandidates, hasLength(1));
+    });
+
+    test("rejects malformed top-level tool content but preserves legacy containers", () {
+      expect(
+        mapper.toolContent(update: {"content": 42}),
+        isA<AcpUnchangedToolContentMutation>(),
+      );
+      for (final content in <Object>[
+        "legacy",
+        {"text": "legacy"},
+        [
+          {"text": "legacy"},
+        ],
+      ]) {
+        expect(
+          (mapper.toolContent(update: {"content": content}) as AcpReplaceToolContentMutation).output,
+          "legacy",
+        );
+      }
+    });
+
+    test("uses raw output only when replacement content has no text", () {
+      final withText =
+          mapper.toolContent(
+                update: {
+                  "content": [
+                    {
+                      "type": "content",
+                      "content": {"type": "text", "text": "standard"},
+                    },
+                  ],
+                  "rawOutput": "fallback",
+                },
+              )
+              as AcpReplaceToolContentMutation;
+      final imageOnly =
+          mapper.toolContent(
+                update: {
+                  "content": [
+                    {
+                      "type": "content",
+                      "content": {
+                        "type": "image",
+                        "data": "AA==",
+                        "mimeType": "image/png",
+                        "uri": null,
+                      },
+                    },
+                  ],
+                  "rawOutput": "fallback",
+                },
+              )
+              as AcpReplaceToolContentMutation;
+
+      expect(withText.output, "standard");
+      expect(imageOnly.output, "fallback");
     });
   });
 }

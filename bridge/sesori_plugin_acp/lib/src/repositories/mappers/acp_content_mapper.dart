@@ -7,6 +7,8 @@ import "package:sesori_shared/sesori_shared.dart"
 import "../../api/models/acp_content_block_dto.dart";
 import "../../api/models/acp_tool_content_dto.dart";
 
+const int acpToolImageCandidateLimit = 4;
+
 sealed class AcpMappedContentBlock {
   const AcpMappedContentBlock();
 }
@@ -55,19 +57,46 @@ enum AcpImageDegradationReason {
   oversized,
 }
 
-enum AcpToolContentMutation {
-  none,
-  diff,
+sealed class AcpToolContentMutation {
+  const AcpToolContentMutation();
+
+  /// Retains mutation boundaries and safe metadata without inline image data.
+  AcpToolContentMutation withoutImagePayload();
 }
 
-final class AcpMappedToolContent {
-  const AcpMappedToolContent({
+final class AcpReplaceToolContentMutation extends AcpToolContentMutation {
+  const AcpReplaceToolContentMutation({
     required this.output,
-    required this.mutation,
+    required this.imageCandidates,
+    required this.hasDiff,
   });
 
   final String? output;
-  final AcpToolContentMutation mutation;
+  final List<AcpMappedImageContentBlock> imageCandidates;
+  final bool hasDiff;
+
+  @override
+  AcpToolContentMutation withoutImagePayload() => AcpReplaceToolContentMutation(
+    output: output,
+    imageCandidates: imageCandidates.whereType<AcpMappedMetadataImageContentBlock>().toList(growable: false),
+    hasDiff: hasDiff,
+  );
+}
+
+final class AcpUpdateToolOutputMutation extends AcpToolContentMutation {
+  const AcpUpdateToolOutputMutation({required this.output});
+
+  final String? output;
+
+  @override
+  AcpToolContentMutation withoutImagePayload() => this;
+}
+
+final class AcpUnchangedToolContentMutation extends AcpToolContentMutation {
+  const AcpUnchangedToolContentMutation();
+
+  @override
+  AcpToolContentMutation withoutImagePayload() => this;
 }
 
 /// Deduplicates privacy-safe mapping warnings across chunks of one logical
@@ -79,9 +108,9 @@ final class AcpContentMappingScope {
 /// Maps standard ACP content blocks into backend-neutral, individually
 /// validated content while retaining no URI or source-path data.
 ///
-/// Message-level ordering, count, and aggregate-byte state belong to the
-/// per-message tracker introduced with image materialization. This mapper owns
-/// only one candidate's typed decoding and transport-safe normalization.
+/// Message/tool ordering, count, and aggregate-byte state belong to their
+/// respective trackers. This mapper owns only one candidate's typed decoding,
+/// transport-safe normalization, and tool mutation selection.
 final class AcpContentMapper {
   const AcpContentMapper();
 
@@ -109,7 +138,11 @@ final class AcpContentMapper {
     required Object? content,
     required AcpContentMappingScope scope,
   }) {
-    return _mapValue(content: content, warned: scope._warned).toList(growable: false);
+    return _mapValue(
+      content: content,
+      warned: scope._warned,
+      toolImagePrefix: null,
+    ).toList(growable: false);
   }
 
   String toolName({required Map<String, dynamic> update}) {
@@ -120,33 +153,69 @@ final class AcpContentMapper {
     return "tool";
   }
 
-  PluginToolStatus toolStatus({required Object? status}) {
+  PluginToolStatus? toolStatus({required Object? status}) {
     return switch (status) {
       "pending" => PluginToolStatus.pending,
       "in_progress" => PluginToolStatus.running,
       "completed" => PluginToolStatus.completed,
       "failed" => PluginToolStatus.error,
-      _ => PluginToolStatus.pending,
+      _ => null,
     };
   }
 
-  AcpMappedToolContent toolContent({required Map<String, dynamic> update}) {
+  AcpToolContentMutation toolContent({required Map<String, dynamic> update}) {
+    if (!update.containsKey("content")) {
+      if (!update.containsKey("rawOutput")) {
+        return const AcpUnchangedToolContentMutation();
+      }
+      if (!_isValidRawOutput(raw: update["rawOutput"])) {
+        return const AcpUnchangedToolContentMutation();
+      }
+      return AcpUpdateToolOutputMutation(
+        output: _boundedToolOutput(
+          text: _rawOutputText(raw: update["rawOutput"]),
+        ),
+      );
+    }
+
+    final content = update["content"];
+    if (content is! String && content is! List && content is! Map) {
+      _warnOnce(
+        reason: _AcpContentWarning.malformed,
+        warned: <_AcpContentWarning>{},
+      );
+      return const AcpUnchangedToolContentMutation();
+    }
     final warned = <_AcpContentWarning>{};
     final buffer = StringBuffer();
-    var mutation = AcpToolContentMutation.none;
-    for (final item in _mapToolValue(content: update["content"], warned: warned)) {
+    final imageCandidates = <AcpMappedImageContentBlock>[];
+    final toolImagePrefix = _AcpToolImagePrefix();
+    var hasDiff = false;
+    for (final item in _mapToolValue(
+      content: content,
+      warned: warned,
+      toolImagePrefix: toolImagePrefix,
+    )) {
       switch (item) {
-        case _AcpMappedToolText(:final text):
-          buffer.write(text);
+        case _AcpMappedToolBlock(:final block):
+          switch (block) {
+            case AcpMappedTextContentBlock(:final text):
+              buffer.write(text);
+            case AcpMappedImageContentBlock():
+              imageCandidates.add(block);
+            case AcpMappedUnsupportedContentBlock() || AcpMappedUnknownContentBlock():
+              continue;
+          }
         case _AcpMappedToolDiff():
-          mutation = AcpToolContentMutation.diff;
+          hasDiff = true;
       }
     }
     final contentText = buffer.toString();
     final text = contentText.isNotEmpty ? contentText : _rawOutputText(raw: update["rawOutput"]);
-    return AcpMappedToolContent(
+    return AcpReplaceToolContentMutation(
       output: _boundedToolOutput(text: text),
-      mutation: mutation,
+      imageCandidates: List.unmodifiable(imageCandidates),
+      hasDiff: hasDiff,
     );
   }
 
@@ -171,6 +240,7 @@ final class AcpContentMapper {
   Iterable<AcpMappedContentBlock> _mapValue({
     required Object? content,
     required Set<_AcpContentWarning> warned,
+    required _AcpToolImagePrefix? toolImagePrefix,
   }) sync* {
     if (content == null) return;
     if (content is String) {
@@ -179,7 +249,11 @@ final class AcpContentMapper {
     }
     if (content is List) {
       for (final entry in content) {
-        yield* _mapValue(content: entry, warned: warned);
+        yield* _mapValue(
+          content: entry,
+          warned: warned,
+          toolImagePrefix: toolImagePrefix,
+        );
       }
       return;
     }
@@ -194,7 +268,11 @@ final class AcpContentMapper {
       dto = AcpContentBlockDto.fromJson(content.cast<String, dynamic>());
     } on Object {
       _warnOnce(reason: _AcpContentWarning.malformed, warned: warned);
-      final fallback = _legacyMapContent(content: content, warned: warned);
+      final fallback = _legacyMapContent(
+        content: content,
+        warned: warned,
+        toolImagePrefix: toolImagePrefix,
+      );
       if (fallback.isEmpty) {
         yield const AcpMappedUnknownContentBlock();
       } else {
@@ -207,13 +285,24 @@ final class AcpContentMapper {
       case AcpTextContentBlockDto(:final text):
         yield AcpMappedTextContentBlock(text: text);
       case AcpImageContentBlockDto(:final data, :final mimeType, :final uri):
+        if (toolImagePrefix != null && !toolImagePrefix.take()) {
+          _warnOnce(
+            reason: _AcpContentWarning.toolImageCountOverflow,
+            warned: warned,
+          );
+          return;
+        }
         yield _mapImage(data: data, mime: mimeType, uri: uri);
       case AcpUnsupportedAudioContentBlockDto() ||
           AcpUnsupportedResourceContentBlockDto() ||
           AcpUnsupportedResourceLinkContentBlockDto():
         yield const AcpMappedUnsupportedContentBlock();
       case AcpUnknownContentBlockDto():
-        final fallback = _legacyMapContent(content: content, warned: warned);
+        final fallback = _legacyMapContent(
+          content: content,
+          warned: warned,
+          toolImagePrefix: toolImagePrefix,
+        );
         if (fallback.isEmpty) {
           yield const AcpMappedUnknownContentBlock();
         } else {
@@ -225,17 +314,27 @@ final class AcpContentMapper {
   Iterable<_AcpMappedToolItem> _mapToolValue({
     required Object? content,
     required Set<_AcpContentWarning> warned,
+    required _AcpToolImagePrefix toolImagePrefix,
   }) sync* {
     if (content == null) return;
     if (content is List) {
       for (final entry in content) {
-        yield* _mapToolValue(content: entry, warned: warned);
+        yield* _mapToolValue(
+          content: entry,
+          warned: warned,
+          toolImagePrefix: toolImagePrefix,
+        );
       }
       return;
     }
     if (content is! Map) {
-      final text = _textFromMappedBlocks(_mapValue(content: content, warned: warned));
-      if (text != null) yield _AcpMappedToolText(text: text);
+      for (final block in _mapValue(
+        content: content,
+        warned: warned,
+        toolImagePrefix: toolImagePrefix,
+      )) {
+        yield _AcpMappedToolBlock(block: block);
+      }
       return;
     }
 
@@ -247,22 +346,37 @@ final class AcpContentMapper {
         yield const _AcpMappedToolDiff();
         return;
       }
-      final text = _textFromMappedBlocks(_mapValue(content: content, warned: warned));
-      if (text != null) yield _AcpMappedToolText(text: text);
+      for (final block in _mapValue(
+        content: content,
+        warned: warned,
+        toolImagePrefix: toolImagePrefix,
+      )) {
+        yield _AcpMappedToolBlock(block: block);
+      }
       return;
     }
 
     switch (dto) {
       case AcpStandardToolContentDto():
-        final text = _textFromMappedBlocks(_mapValue(content: content["content"], warned: warned));
-        if (text != null) yield _AcpMappedToolText(text: text);
+        for (final block in _mapValue(
+          content: content["content"],
+          warned: warned,
+          toolImagePrefix: toolImagePrefix,
+        )) {
+          yield _AcpMappedToolBlock(block: block);
+        }
       case AcpDiffToolContentDto():
         yield const _AcpMappedToolDiff();
       case AcpTerminalToolContentDto():
         return;
       case AcpUnknownToolContentDto():
-        final text = _textFromMappedBlocks(_mapValue(content: content, warned: warned));
-        if (text != null) yield _AcpMappedToolText(text: text);
+        for (final block in _mapValue(
+          content: content,
+          warned: warned,
+          toolImagePrefix: toolImagePrefix,
+        )) {
+          yield _AcpMappedToolBlock(block: block);
+        }
     }
   }
 
@@ -293,7 +407,11 @@ final class AcpContentMapper {
       return buffer.toString();
     }
     final content = _textFromMappedBlocks(
-      _mapValue(content: raw["content"], warned: <_AcpContentWarning>{}),
+      _mapValue(
+        content: raw["content"],
+        warned: <_AcpContentWarning>{},
+        toolImagePrefix: null,
+      ),
     )?.trimRight();
     if (content != null && content.isNotEmpty) return content;
     final exitCode = raw["exitCode"];
@@ -301,9 +419,19 @@ final class AcpContentMapper {
     return null;
   }
 
+  bool _isValidRawOutput({required Object? raw}) {
+    if (raw is String) return true;
+    if (raw is! Map) return false;
+    if (raw.isEmpty) return true;
+    if (raw["stdout"] is String || raw["stderr"] is String || raw["exitCode"] is int) return true;
+    final content = raw["content"];
+    return content is String || content is List || content is Map;
+  }
+
   List<AcpMappedContentBlock> _legacyMapContent({
     required Map<dynamic, dynamic> content,
     required Set<_AcpContentWarning> warned,
+    required _AcpToolImagePrefix? toolImagePrefix,
   }) {
     final text = content["text"];
     if (text is String && text.isNotEmpty) {
@@ -311,7 +439,11 @@ final class AcpContentMapper {
     }
     final nested = content["content"];
     if (nested == null) return const [];
-    return _mapValue(content: nested, warned: warned).toList(growable: false);
+    return _mapValue(
+      content: nested,
+      warned: warned,
+      toolImagePrefix: toolImagePrefix,
+    ).toList(growable: false);
   }
 
   AcpMappedImageContentBlock _mapImage({
@@ -431,22 +563,39 @@ final class AcpContentMapper {
     required Set<_AcpContentWarning> warned,
   }) {
     if (!warned.add(reason)) return;
-    Log.w("[acp] skipping malformed content block");
+    Log.w(
+      switch (reason) {
+        _AcpContentWarning.malformed => "[acp] skipping malformed content block",
+        _AcpContentWarning.toolImageCountOverflow =>
+          "[acp] tool image attachment collection exceeds the count limit; dropping excess candidates",
+      },
+    );
   }
 }
 
 enum _AcpContentWarning {
   malformed,
+  toolImageCountOverflow,
+}
+
+final class _AcpToolImagePrefix {
+  int _candidateCount = 0;
+
+  bool take() {
+    if (_candidateCount >= acpToolImageCandidateLimit) return false;
+    _candidateCount++;
+    return true;
+  }
 }
 
 sealed class _AcpMappedToolItem {
   const _AcpMappedToolItem();
 }
 
-final class _AcpMappedToolText extends _AcpMappedToolItem {
-  const _AcpMappedToolText({required this.text});
+final class _AcpMappedToolBlock extends _AcpMappedToolItem {
+  const _AcpMappedToolBlock({required this.block});
 
-  final String text;
+  final AcpMappedContentBlock block;
 }
 
 final class _AcpMappedToolDiff extends _AcpMappedToolItem {

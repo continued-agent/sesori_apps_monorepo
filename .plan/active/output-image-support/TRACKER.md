@@ -4,11 +4,11 @@
 
 - **Plan slug:** `output-image-support`
 - **Implementation base:** `origin/main` at
-  `f5f24240bb49be17313f7f2748720f8399523e23`
-- **Series state:** Step 10/13 open as [PR #666](https://github.com/sesori-ai/sesori_apps_monorepo/pull/666)
-- **Current step:** Step 10/13 — surface live ACP message images
+  `e64fb4b5d6daeee55447efdf0177318daece5932`
+- **Series state:** Step 10/13 merged as [PR #666](https://github.com/sesori-ai/sesori_apps_monorepo/pull/666)
+- **Current step:** Step 11/13 — [PR #670](https://github.com/sesori-ai/sesori_apps_monorepo/pull/670) open; local review fixes verified
 - **Plan PR:** [#638](https://github.com/sesori-ai/sesori_apps_monorepo/pull/638)
-- **Next action:** monitor PR #666 and address CI or review findings
+- **Next action:** review and publish the local PR feedback fixes
 
 ## Plan Review
 
@@ -35,8 +35,8 @@
 | [x] | 7/13 | `output-image-support-codex-image-history` | `[output-image-support] feat(codex): restore output image history [step 7/13]` | 1,100-1,500 | [PR #657](https://github.com/sesori-ai/sesori_apps_monorepo/pull/657) merged as `4ca1cb90`; 589 changed lines |
 | [x] | 8/13 | `output-image-support-acp-content-blocks` | `[output-image-support] refactor(acp): type content blocks [step 8/13]` | 1,300-1,500 | [PR #658](https://github.com/sesori-ai/sesori_apps_monorepo/pull/658) merged as `a973796c`; 1,119 changed lines |
 | [x] | 9/13 | `output-image-support-acp-content-mapping` | `[output-image-support] refactor(acp): centralize tool content mapping [step 9/13]` | 1,100-1,500 | [PR #661](https://github.com/sesori-ai/sesori_apps_monorepo/pull/661) merged as `f5f24240`; 879 changed lines |
-| [ ] | 10/13 | `output-image-support-acp-message-images` | `[output-image-support] feat(acp): surface live message images [step 10/13]` | 1,100-1,500 | [PR #666](https://github.com/sesori-ai/sesori_apps_monorepo/pull/666) open; 1,138 changed lines |
-| [ ] | 11/13 | `output-image-support-acp-tool-images` | `[output-image-support] feat(acp): surface live tool images [step 11/13]` | 1,200-1,500 | Blocked on Step 10 merge |
+| [x] | 10/13 | `output-image-support-acp-message-images` | `[output-image-support] feat(acp): surface live message images [step 10/13]` | 1,100-1,500 | [PR #666](https://github.com/sesori-ai/sesori_apps_monorepo/pull/666) merged as `e64fb4b5`; 1,138 changed lines |
+| [ ] | 11/13 | `output-image-support-acp-tool-images` | `⚙️ [output-image-support] feat(acp): surface live tool images [step 11/13]` | 1,200-1,500 | [PR #670](https://github.com/sesori-ai/sesori_apps_monorepo/pull/670) open; local review fixes verified |
 | [ ] | 12/13 | `output-image-support-acp-image-replay` | `[output-image-support] feat(acp): restore output image replay [step 12/13]` | 900-1,400 | Blocked on Step 11 merge |
 | [ ] | 13/13 | `output-image-support-retire-plan` | `[output-image-support] docs: retire output image support plan [step 13/13]` | 50-200 | Blocked on Step 12 merge |
 
@@ -52,7 +52,7 @@
 8. `[output-image-support] refactor(acp): type content blocks [step 8/13]`
 9. `[output-image-support] refactor(acp): centralize tool content mapping [step 9/13]`
 10. `[output-image-support] feat(acp): surface live message images [step 10/13]`
-11. `[output-image-support] feat(acp): surface live tool images [step 11/13]`
+11. `⚙️ [output-image-support] feat(acp): surface live tool images [step 11/13]`
 12. `[output-image-support] feat(acp): restore output image replay [step 12/13]`
 13. `[output-image-support] docs: retire output image support plan [step 13/13]`
 
@@ -208,10 +208,46 @@
   content in both live and replay, and resets unrendered id-less tracker state at
   message boundaries. All 90 focused ACP tests, 8 Cursor mapper tests, and fatal
   analysis in both packages pass. The 1,138 changed-line diff is below the
+  1,500-line soft cap; no neighboring scope was combined. PR #666 merged as
+  `e64fb4b5` on 2026-08-01.
+- Step 11/13 (2026-08-01): added the zero-collaborator
+  `AcpToolContentTracker`; changed `AcpContentMapper` to emit sealed replace,
+  update-output, and unchanged mutations; and made both `_LiveTool` and
+  replay `_ToolDraft` retain and apply that tracker. Live tool cards now render
+  bounded standard ACP image attachments, while replay retains the same
+  normalized final attachment state but deliberately renders none until Step
+  12. Omission preservation, complete replacement, empty clearing, image-only
+  replacement, raw-output fallback, count/aggregate limits, privacy-safe
+  degradation, and one-shot diff signaling have focused coverage. All 199 ACP
+  tests and all 109 Cursor tests pass; fatal analysis passes in both packages;
+  `aristotle-impl-review` approved with no findings. No code generation was
+  required. PR #670 review found four valid root issues across eight duplicate
+  bot threads: reordered late `tool_call`s now retain newer live/replay content,
+  status, and diff state while filling missing metadata; tool mapping stops
+  normalizing image candidates after the four-item prefix while still scanning
+  trailing text/diff entries; explicit non-terminal diff content now waits for
+  completion while retaining the mutation; and unused tool snapshot counters
+  were removed. The diff fix preserves PR #414's later `7b2d21dc` exception for
+  explicit diff content with no known status after `952cc30f` introduced terminal
+  gating. The five earlier regressions failed before their fixes. Follow-up review
+  centralized the shared four-image candidate limit; status-less diff compatibility
+  remains unchanged. Malformed raw-output-only updates preserve prior state while
+  explicit empty output clears; valid siblings remain usable and malformed nested
+  content is rejected. The three latest boundary/security fixes map only recognized
+  statuses as explicit in live/replay, strip inline payloads from retained replay
+  tool state while preserving safe metadata and replacement/output/diff boundaries,
+  and treat malformed top-level content as unchanged while String/List/Map forms and
+  empty collections still replace. The live/replay status and mapper regressions
+  failed first; payload-free retained state has tracker coverage. All 207 ACP and
+  all 109 Cursor tests pass; fatal analysis passes in both packages, and focused
+  tests plus `git diff --check` pass. The final 1,477-line PR diff remains below the
   1,500-line soft cap; no neighboring scope was combined.
 
 ## Findings And Plan Deltas
 
+- **2026-08-01 — Live aggregate budget declined:** Retain the per-tool 5 MiB
+  bound and turn cleanup; the user declined additional cross-tool mutable
+  accounting as disproportionate for the edge case.
 - **2026-07-31 — Automatic continuation:** After each merged PR, proceed with
   the next numbered step without waiting for another explicit user request.
 - **2026-07-31 — Lifecycle and line budget:** Set a 1,500 changed-line soft cap,
