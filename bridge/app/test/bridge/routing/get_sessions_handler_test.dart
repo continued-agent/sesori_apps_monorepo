@@ -3,8 +3,10 @@ import "dart:convert";
 import "package:sesori_bridge/src/api/database/database.dart";
 import "package:sesori_bridge/src/api/database/tables/pull_requests_table.dart";
 import "package:sesori_bridge/src/api/database/tables/session_table.dart";
+import "package:sesori_bridge/src/bridge/repositories/models/verified_github_login.dart";
 import "package:sesori_bridge/src/bridge/repositories/session_unseen_calculator.dart";
 import "package:sesori_bridge/src/bridge/routing/get_sessions_handler.dart";
+import "package:sesori_bridge/src/bridge/services/pr_sync_service.dart";
 import "package:sesori_plugin_interface/sesori_plugin_interface.dart";
 import "package:sesori_shared/sesori_shared.dart";
 import "package:test/test.dart";
@@ -734,6 +736,66 @@ void main() {
       expect(pr?.checkStatus, equals(PrCheckStatus.success));
     });
 
+    test("fresh identity changes hide another login's cached PR", () async {
+      plugin.sessionsResult = const [
+        PluginSession(
+          id: "s1",
+          projectID: "p1",
+          directory: "/tmp",
+          parentID: null,
+          title: "session with private PR",
+          time: null,
+        ),
+      ];
+      pullRequestRepository.setPr(
+        sessionId: "s1",
+        pullRequest: const PullRequestDto(
+          projectId: "p1",
+          githubRepositoryIdentity: "org/repo",
+          githubLogin: "octocat",
+          prNumber: 43,
+          branchName: "feature/private",
+          url: "https://github.com/org/repo/pull/43",
+          title: "Private PR",
+          state: PrState.open,
+          mergeableStatus: PrMergeableStatus.mergeable,
+          reviewDecision: PrReviewDecision.approved,
+          checkStatus: PrCheckStatus.success,
+          lastCheckedAt: 1,
+          createdAt: 1,
+        ),
+      );
+
+      final first = await handler.handle(
+        makeRequest("POST", "/sessions"),
+        body: const SessionListRequest(projectId: "p1", start: null, limit: null),
+        pathParams: {},
+        queryParams: {},
+        fragment: null,
+      );
+      prSyncService.verifiedGithubLogin = VerifiedGithubLogin.tryParse(rawLogin: "hubot");
+      final switched = await handler.handle(
+        makeRequest("POST", "/sessions"),
+        body: const SessionListRequest(projectId: "p1", start: null, limit: null),
+        pathParams: {},
+        queryParams: {},
+        fragment: null,
+      );
+      prSyncService.verifiedGithubLogin = null;
+      final unknown = await handler.handle(
+        makeRequest("POST", "/sessions"),
+        body: const SessionListRequest(projectId: "p1", start: null, limit: null),
+        pathParams: {},
+        queryParams: {},
+        fragment: null,
+      );
+
+      expect(first.items.single.pullRequest?.number, 43);
+      expect(switched.items.single.pullRequest, isNull);
+      expect(unknown.items.single.pullRequest, isNull);
+      expect(prSyncService.identityVerificationCallCount, 3);
+    });
+
     test("reads catalog fields while preserving stored worktree and pull request metadata", () async {
       final realRepository = singlePluginSessionRepository(
         plugin: plugin,
@@ -931,6 +993,57 @@ void main() {
       expect(prSyncService.calls.single, equals((projectId: "project-1", projectPath: "/tmp/project")));
     });
 
+    test("bounds initial identity verification and returns PR-free sessions", () async {
+      plugin.sessionsResult = const [
+        PluginSession(
+          id: "s1",
+          projectID: "p1",
+          directory: "/tmp",
+          parentID: null,
+          title: "session one",
+          time: null,
+        ),
+      ];
+      pullRequestRepository.setPr(
+        sessionId: "s1",
+        pullRequest: const PullRequestDto(
+          projectId: "p1",
+          githubRepositoryIdentity: "org/repo",
+          githubLogin: "octocat",
+          prNumber: 97,
+          branchName: "feature/slow-identity",
+          url: "https://github.com/org/repo/pull/97",
+          title: "Slow identity PR",
+          state: PrState.open,
+          mergeableStatus: PrMergeableStatus.mergeable,
+          reviewDecision: PrReviewDecision.approved,
+          checkStatus: PrCheckStatus.success,
+          lastCheckedAt: 1,
+          createdAt: 1,
+        ),
+      );
+      final slowIdentityService = FakePrSyncService(
+        identityVerificationDelays: const [Duration(milliseconds: 100)],
+      );
+      final boundedHandler = GetSessionsHandler(
+        sessionRepository: sessionRepository,
+        prSyncService: slowIdentityService,
+        prRefreshTimeout: const Duration(milliseconds: 10),
+      );
+
+      final result = await boundedHandler.handle(
+        makeRequest("POST", "/sessions"),
+        body: const SessionListRequest(projectId: "p1", start: null, limit: null),
+        pathParams: {},
+        queryParams: {},
+        fragment: null,
+      );
+
+      expect(result.items.single.pullRequest, isNull);
+      expect(result.items.single.pullRequestHistory, isEmpty);
+      await Future<void>.delayed(const Duration(milliseconds: 110));
+    });
+
     test("triggers PR refresh with the stored catalog project path", () async {
       sessionRepository.projectPathResult = "/tmp/project";
       await handler.handle(
@@ -970,7 +1083,7 @@ void main() {
       expect(prSyncService.calls.single, equals((projectId: "project-1", projectPath: "/tmp/fallback-project")));
     });
 
-    test("returns original sessions when PR refresh times out", () async {
+    test("returns sessions without cached PR metadata when a waited refresh times out", () async {
       plugin.sessionsResult = const [
         PluginSession(
           id: "s1",
@@ -981,6 +1094,24 @@ void main() {
           time: null,
         ),
       ];
+      pullRequestRepository.setPr(
+        sessionId: "s1",
+        pullRequest: const PullRequestDto(
+          projectId: "p1",
+          githubRepositoryIdentity: "org/repo",
+          githubLogin: "octocat",
+          prNumber: 98,
+          branchName: "feature/timeout",
+          url: "https://github.com/org/repo/pull/98",
+          title: "Timed out PR",
+          state: PrState.open,
+          mergeableStatus: PrMergeableStatus.mergeable,
+          reviewDecision: PrReviewDecision.approved,
+          checkStatus: PrCheckStatus.success,
+          lastCheckedAt: 1,
+          createdAt: 1,
+        ),
+      );
       final slowPrSyncService = FakePrSyncService(delay: const Duration(seconds: 10));
       final timeoutHandler = GetSessionsHandler(
         sessionRepository: sessionRepository,
@@ -998,7 +1129,225 @@ void main() {
 
       expect(result.items, hasLength(1));
       expect(result.items.single.title, equals("session one"));
+      expect(result.items.single.pullRequest, isNull);
+      expect(result.items.single.pullRequestHistory, isEmpty);
       expect(sessionRepository.getSessionsCallCount, equals(1));
+    });
+
+    test("strips cached PR metadata when a waited refresh fails", () async {
+      plugin.sessionsResult = const [
+        PluginSession(
+          id: "s1",
+          projectID: "p1",
+          directory: "/tmp",
+          parentID: null,
+          title: "session one",
+          time: null,
+        ),
+      ];
+      pullRequestRepository.setPr(
+        sessionId: "s1",
+        pullRequest: const PullRequestDto(
+          projectId: "p1",
+          githubRepositoryIdentity: "org/repo",
+          githubLogin: "octocat",
+          prNumber: 100,
+          branchName: "feature/failed-refresh",
+          url: "https://github.com/org/repo/pull/100",
+          title: "Stale PR",
+          state: PrState.open,
+          mergeableStatus: PrMergeableStatus.mergeable,
+          reviewDecision: PrReviewDecision.approved,
+          checkStatus: PrCheckStatus.success,
+          lastCheckedAt: 1,
+          createdAt: 1,
+        ),
+      );
+      final failingHandler = GetSessionsHandler(
+        sessionRepository: sessionRepository,
+        prSyncService: FakePrSyncService(refreshOutcome: PrRefreshOutcome.failed),
+      );
+
+      final result = await failingHandler.handle(
+        makeRequest("POST", "/sessions"),
+        body: const SessionListRequest(projectId: "p1", start: null, limit: null, waitForPrData: true),
+        pathParams: {},
+        queryParams: {},
+        fragment: null,
+      );
+
+      expect(result.items.single.pullRequest, isNull);
+      expect(result.items.single.pullRequestHistory, isEmpty);
+    });
+
+    test("strips cached PR metadata when another refresh is in progress", () async {
+      plugin.sessionsResult = const [
+        PluginSession(
+          id: "s1",
+          projectID: "p1",
+          directory: "/tmp",
+          parentID: null,
+          title: "session one",
+          time: null,
+        ),
+      ];
+      pullRequestRepository.setPr(
+        sessionId: "s1",
+        pullRequest: const PullRequestDto(
+          projectId: "p1",
+          githubRepositoryIdentity: "org/repo",
+          githubLogin: "octocat",
+          prNumber: 101,
+          branchName: "feature/in-progress",
+          url: "https://github.com/org/repo/pull/101",
+          title: "In-progress refresh PR",
+          state: PrState.open,
+          mergeableStatus: PrMergeableStatus.mergeable,
+          reviewDecision: PrReviewDecision.approved,
+          checkStatus: PrCheckStatus.success,
+          lastCheckedAt: 1,
+          createdAt: 1,
+        ),
+      );
+      final inProgressHandler = GetSessionsHandler(
+        sessionRepository: sessionRepository,
+        prSyncService: FakePrSyncService(refreshOutcome: PrRefreshOutcome.inProgress),
+      );
+
+      final result = await inProgressHandler.handle(
+        makeRequest("POST", "/sessions"),
+        body: const SessionListRequest(projectId: "p1", start: null, limit: null, waitForPrData: true),
+        pathParams: {},
+        queryParams: {},
+        fragment: null,
+      );
+
+      expect(result.items.single.pullRequest, isNull);
+      expect(result.items.single.pullRequestHistory, isEmpty);
+    });
+
+    test("strips cached PR metadata when no refresh source is available", () async {
+      plugin.sessionsResult = const [
+        PluginSession(
+          id: "s1",
+          projectID: "p1",
+          directory: "",
+          parentID: null,
+          title: "session one",
+          time: null,
+        ),
+      ];
+      pullRequestRepository.setPr(
+        sessionId: "s1",
+        pullRequest: const PullRequestDto(
+          projectId: "p1",
+          githubRepositoryIdentity: "org/repo",
+          githubLogin: "octocat",
+          prNumber: 103,
+          branchName: "feature/no-source",
+          url: "https://github.com/org/repo/pull/103",
+          title: "Unavailable refresh source PR",
+          state: PrState.open,
+          mergeableStatus: PrMergeableStatus.mergeable,
+          reviewDecision: PrReviewDecision.approved,
+          checkStatus: PrCheckStatus.success,
+          lastCheckedAt: 1,
+          createdAt: 1,
+        ),
+      );
+
+      final result = await handler.handle(
+        makeRequest("POST", "/sessions"),
+        body: const SessionListRequest(projectId: "p1", start: null, limit: null, waitForPrData: true),
+        pathParams: {},
+        queryParams: {},
+        fragment: null,
+      );
+
+      expect(result.items.single.pullRequest, isNull);
+      expect(result.items.single.pullRequestHistory, isEmpty);
+    });
+
+    test("keeps final identity verification inside the waited deadline", () async {
+      plugin.sessionsResult = const [
+        PluginSession(
+          id: "s1",
+          projectID: "p1",
+          directory: "/tmp",
+          parentID: null,
+          title: "session one",
+          time: null,
+        ),
+      ];
+      pullRequestRepository.setPr(
+        sessionId: "s1",
+        pullRequest: const PullRequestDto(
+          projectId: "p1",
+          githubRepositoryIdentity: "org/repo",
+          githubLogin: "octocat",
+          prNumber: 102,
+          branchName: "feature/final-identity",
+          url: "https://github.com/org/repo/pull/102",
+          title: "Final identity PR",
+          state: PrState.open,
+          mergeableStatus: PrMergeableStatus.mergeable,
+          reviewDecision: PrReviewDecision.approved,
+          checkStatus: PrCheckStatus.success,
+          lastCheckedAt: 1,
+          createdAt: 1,
+        ),
+      );
+      final slowFinalIdentityService = FakePrSyncService(
+        identityVerificationDelays: const [
+          Duration.zero,
+          Duration(milliseconds: 100),
+        ],
+      );
+      final boundedHandler = GetSessionsHandler(
+        sessionRepository: sessionRepository,
+        prSyncService: slowFinalIdentityService,
+        prRefreshTimeout: const Duration(milliseconds: 10),
+      );
+
+      final result = await boundedHandler.handle(
+        makeRequest("POST", "/sessions"),
+        body: const SessionListRequest(projectId: "p1", start: null, limit: null, waitForPrData: true),
+        pathParams: {},
+        queryParams: {},
+        fragment: null,
+      );
+
+      expect(result.items.single.pullRequest, isNull);
+      expect(result.items.single.pullRequestHistory, isEmpty);
+      await Future<void>.delayed(const Duration(milliseconds: 110));
+    });
+
+    test("converts asynchronous refresh errors to a PR-free response", () async {
+      plugin.sessionsResult = const [
+        PluginSession(
+          id: "s1",
+          projectID: "p1",
+          directory: "/tmp",
+          parentID: null,
+          title: "session one",
+          time: null,
+        ),
+      ];
+      final failingHandler = GetSessionsHandler(
+        sessionRepository: sessionRepository,
+        prSyncService: FakePrSyncService(refreshError: StateError("refresh failed")),
+      );
+
+      final result = await failingHandler.handle(
+        makeRequest("POST", "/sessions"),
+        body: const SessionListRequest(projectId: "p1", start: null, limit: null, waitForPrData: true),
+        pathParams: {},
+        queryParams: {},
+        fragment: null,
+      );
+
+      expect(result.items.single.pullRequest, isNull);
+      expect(result.items.single.pullRequestHistory, isEmpty);
     });
 
     test("enriches sessions when PR refresh succeeds within timeout", () async {
