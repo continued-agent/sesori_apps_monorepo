@@ -47,6 +47,77 @@ void main() {
       expect(rolloutApi.readSessionIndex(), isEmpty);
     });
 
+    test("desktop state tolerantly extracts only non-empty projectless thread ids", () async {
+      File(p.join(codexHome.path, ".codex-global-state.json")).writeAsStringSync(
+        jsonEncode({
+          "future-field": {"nested": true},
+          "projectless-thread-ids": [
+            " projectless-one ",
+            42,
+            null,
+            "",
+            {"future": "shape"},
+            "projectless-two",
+            "projectless-one",
+          ],
+        }),
+      );
+
+      expect(
+        (await rolloutApi.readDesktopState()).projectlessThreadIds,
+        {"projectless-one", "projectless-two"},
+      );
+    });
+
+    test("desktop state treats a missing or future-shaped projectless field as empty", () async {
+      expect((await rolloutApi.readDesktopState()).projectlessThreadIds, isEmpty);
+      final state = File(p.join(codexHome.path, ".codex-global-state.json"));
+      for (final contents in [
+        jsonEncode({"future-field": true}),
+        jsonEncode({
+          "projectless-thread-ids": {"future": "shape"},
+        }),
+      ]) {
+        state.writeAsStringSync(contents);
+        expect((await rolloutApi.readDesktopState()).projectlessThreadIds, isEmpty);
+      }
+    });
+
+    test("desktop state read failures retain a privacy-safe cause", () async {
+      File(p.join(codexHome.path, ".codex-global-state.json")).writeAsStringSync(
+        '{"projectless-thread-ids":["private-thread-id"',
+      );
+
+      await expectLater(
+        rolloutApi.readDesktopState(),
+        throwsA(
+          isA<CodexDesktopStateReadException>()
+              .having((error) => error.cause, "cause", isA<FormatException>())
+              .having(
+                (error) => error.toString(),
+                "presentation",
+                isNot(contains("private-thread-id")),
+              ),
+        ),
+      );
+    });
+
+    test("resolves the generated Codex chats directory from the user home", () {
+      final userHome = p.join(codexHome.path, "user-home");
+      final api = CodexRolloutApi(
+        environment: {
+          "CODEX_HOME": codexHome.path,
+          "HOME": userHome,
+          "USERPROFILE": userHome,
+        },
+      );
+
+      expect(
+        api.documentsCodexDirectory,
+        p.join(userHome, "Documents", "Codex"),
+      );
+    });
+
     test("readIndex decodes JSON lines and skips malformed JSON", () {
       final index = File(p.join(codexHome.path, "session_index.jsonl"))
         ..writeAsStringSync(
