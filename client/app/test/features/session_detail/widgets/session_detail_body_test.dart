@@ -6,6 +6,7 @@ import "package:flutter/foundation.dart";
 import "package:flutter/gestures.dart" show kSecondaryButton;
 import "package:flutter/material.dart";
 import "package:flutter_bloc/flutter_bloc.dart";
+import "package:flutter_keyboard_visibility/flutter_keyboard_visibility.dart";
 import "package:flutter_test/flutter_test.dart";
 import "package:get_it/get_it.dart";
 import "package:go_router/go_router.dart";
@@ -30,9 +31,22 @@ Widget _buildApp({
   required SessionDetailCubit cubit,
   ChatInputMode chatInputMode = ChatInputMode.voiceFirst,
   StubChatInputModeCubit? chatInputModeCubit,
+  bool startAtPreviousScreen = false,
 }) {
   final router = GoRouter(
+    initialLocation: startAtPreviousScreen ? "/previous" : "/",
     routes: [
+      GoRoute(
+        path: "/previous",
+        builder: (context, state) => Scaffold(
+          body: Center(
+            child: TextButton(
+              onPressed: () => context.push("/"),
+              child: const Text("Open session"),
+            ),
+          ),
+        ),
+      ),
       GoRoute(
         path: "/",
         builder: (context, state) => BlocProvider<SessionDetailCubit>.value(
@@ -140,6 +154,7 @@ void main() {
   // renders its flat (cue) menu here — the menu rows are Material InkWells, not
   // GlassMenuItems. Finders below target those InkWells.
   setUp(() async {
+    KeyboardVisibilityTesting.setVisibilityForTesting(false);
     await GetIt.instance.reset();
     cubit = MockSessionDetailCubit();
     voiceTranscriptionService = MockVoiceTranscriptionService();
@@ -460,6 +475,78 @@ void main() {
     await tester.tap(find.byIcon(TablerRegular.arrow_up));
     await tester.pump();
     expect(composerFocus(tester).hasFocus, isTrue, reason: "send must not dismiss the keyboard");
+  });
+
+  testWidgets("system back dismisses the composer keyboard before popping the route", (tester) async {
+    await tester.pumpWidget(_buildApp(cubit: cubit, startAtPreviousScreen: true));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text("Open session"));
+    await tester.pumpAndSettle();
+
+    await enterTypingMode(tester);
+    final focusNode = composerFocus(tester);
+    expect(focusNode.hasFocus, isTrue);
+    final fieldContext = tester.element(find.byType(EditableText));
+    expect(Theme.of(fieldContext).platform, TargetPlatform.android);
+
+    // Focus changes before the platform reports the raised IME. The composer
+    // must subscribe to this later visibility update so its PopScope activates.
+    KeyboardVisibilityTesting.setVisibilityForTesting(true);
+    await tester.pumpAndSettle();
+    expect(focusNode.hasFocus, isTrue);
+
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+
+    expect(focusNode.hasFocus, isFalse);
+    expect(find.byType(SessionDetailBody), findsOneWidget);
+    expect(find.text("Open session"), findsNothing);
+
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+
+    expect(find.byType(SessionDetailBody), findsNothing);
+    expect(find.text("Open session"), findsOneWidget);
+  });
+
+  testWidgets("toolbar back pops the route while the Android keyboard is visible", (tester) async {
+    await tester.pumpWidget(_buildApp(cubit: cubit, startAtPreviousScreen: true));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text("Open session"));
+    await tester.pumpAndSettle();
+
+    await enterTypingMode(tester);
+    expect(composerFocus(tester).hasFocus, isTrue);
+    KeyboardVisibilityTesting.setVisibilityForTesting(true);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(TablerRegular.chevron_left));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(SessionDetailBody), findsNothing);
+    expect(find.text("Open session"), findsOneWidget);
+  });
+
+  testWidgets("iOS back navigation stays available while the composer is focused", (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    try {
+      await tester.pumpWidget(_buildApp(cubit: cubit, startAtPreviousScreen: true));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text("Open session"));
+      await tester.pumpAndSettle();
+      await enterTypingMode(tester);
+      expect(composerFocus(tester).hasFocus, isTrue);
+      KeyboardVisibilityTesting.setVisibilityForTesting(true);
+      await tester.pumpAndSettle();
+
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+
+      expect(find.byType(SessionDetailBody), findsNothing);
+      expect(find.text("Open session"), findsOneWidget);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
   });
 
   testWidgets("opening a composer menu dismisses the keyboard (glass path)", (tester) async {
