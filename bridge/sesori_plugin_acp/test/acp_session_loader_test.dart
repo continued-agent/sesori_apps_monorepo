@@ -1,3 +1,5 @@
+import "dart:io";
+
 import "package:acp_plugin/acp_plugin.dart";
 import "package:sesori_plugin_interface/sesori_plugin_interface.dart";
 import "package:test/test.dart";
@@ -294,7 +296,66 @@ void main() {
       expect(collector.build().single.parts.single.text, "one flow");
     });
 
-    test("validated replay images remain unmaterialized without changing text grouping", () {
+    test("unrenderable assistant chunks do not create empty replay messages", () {
+      final collector = AcpReplayCollector(
+        sessionId: "s1",
+        agentId: "Cursor",
+        initialUserMessageId: null,
+        haltClassifier: null,
+        contentMapper: const AcpContentMapper(),
+      )
+        ..consume(upd({
+          "sessionUpdate": "agent_message_chunk",
+          "content": {"type": "text", "text": ""},
+        }))
+        ..consume(upd({
+          "sessionUpdate": "agent_message_chunk",
+          "content": {"type": "audio", "data": "private", "mimeType": "audio/wav"},
+        }));
+
+      expect(collector.build(), isEmpty);
+    });
+
+    test("a non-string session update discriminator is ignored", () {
+      final collector = AcpReplayCollector(
+        sessionId: "s1",
+        agentId: "Cursor",
+        initialUserMessageId: null,
+        haltClassifier: null,
+        contentMapper: const AcpContentMapper(),
+      );
+
+      expect(
+        () => collector.consume(upd({"sessionUpdate": 42})),
+        returnsNormally,
+      );
+      expect(collector.build(), isEmpty);
+    });
+
+    test("malformed replay chunks share warning state without creating a message", () {
+      final collector = AcpReplayCollector(
+        sessionId: "s1",
+        agentId: "Cursor",
+        initialUserMessageId: null,
+        haltClassifier: null,
+        contentMapper: const AcpContentMapper(),
+      );
+      final output = _captureWarnings(() {
+        for (var index = 0; index < 2; index++) {
+          collector.consume(upd({
+            "sessionUpdate": "agent_message_chunk",
+            "messageId": "m1",
+            "content": {"type": "text", "text": 42, "private": "secret"},
+          }));
+        }
+      });
+
+      expect("malformed content block".allMatches(output), hasLength(1));
+      expect(output, isNot(contains("secret")));
+      expect(collector.build(), isEmpty);
+    });
+
+    test("replay records image boundaries while deferring image materialization", () {
       final collector = AcpReplayCollector(
         sessionId: "s1",
         agentId: "Cursor",
@@ -324,10 +385,43 @@ void main() {
         }));
 
       final message = collector.build().single;
-      expect(message.parts, hasLength(1));
-      expect(message.parts.single.type, PluginMessagePartType.text);
-      expect(message.parts.single.text, "beforeafter");
-      expect(message.parts.single.attachment, isNull);
+      expect(message.parts, hasLength(2));
+      expect(
+        message.parts.map((part) => part.id),
+        ["s1-mmixed-assistant-text", "s1-mmixed-assistant-text-1"],
+      );
+      expect(message.parts.map((part) => part.text), ["before", "after"]);
+      expect(message.parts, everyElement(isA<PluginMessagePart>().having((part) => part.attachment, "attachment", isNull)));
+    });
+
+    test("an id-less image closes its replay draft before a following tool", () {
+      final collector = AcpReplayCollector(
+        sessionId: "s1",
+        agentId: "Cursor",
+        initialUserMessageId: null,
+        haltClassifier: null,
+        contentMapper: const AcpContentMapper(),
+      )
+        ..consume(upd({
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "image",
+            "data": "AA==",
+            "mimeType": "image/png",
+            "uri": null,
+          },
+        }))
+        ..consume(upd({
+          "sessionUpdate": "tool_call",
+          "toolCallId": "t1",
+          "kind": "read",
+          "status": "completed",
+        }));
+
+      final messages = collector.build();
+      expect(messages, hasLength(2));
+      expect(messages.first.parts, isEmpty);
+      expect(messages.last.parts.single.type, PluginMessagePartType.tool);
     });
 
     test("an explicit messageId after id-less text starts a new message", () {
@@ -433,6 +527,70 @@ void main() {
       expect(message.parts, isEmpty);
     });
 
+    test("an identified halt-like message remains assistant content", () {
+      final collector = AcpReplayCollector(
+        sessionId: "s1",
+        agentId: "Cursor",
+        initialUserMessageId: null,
+        haltClassifier: ({required text}) =>
+            const AcpHaltNotice(errorName: "cursor_gate", message: "gate"),
+        contentMapper: const AcpContentMapper(),
+      )..consume(upd({
+          "sessionUpdate": "agent_message_chunk",
+          "messageId": "m1",
+          "content": {"type": "text", "text": "Check your settings to continue"},
+        }));
+
+      expect(collector.build().single.info, isA<PluginMessageAssistant>());
+    });
+
+    test("an image-bearing halt-like message remains an assistant message", () {
+      final collector = AcpReplayCollector(
+        sessionId: "s1",
+        agentId: "Cursor",
+        initialUserMessageId: null,
+        haltClassifier: ({required text}) =>
+            const AcpHaltNotice(errorName: "cursor_gate", message: "gate"),
+        contentMapper: const AcpContentMapper(),
+      )..consume(upd({
+          "sessionUpdate": "agent_message_chunk",
+          "content": [
+            {
+              "type": "image",
+              "data": "AA==",
+              "mimeType": "image/png",
+              "uri": null,
+            },
+            {"type": "text", "text": "Check your settings to continue"},
+          ],
+        }));
+
+      final message = collector.build().single;
+      expect(message.info, isA<PluginMessageAssistant>());
+      expect(message.parts.single.text, "Check your settings to continue");
+    });
+
+    test("unsupported content keeps halt-like replay text as an assistant message", () {
+      final collector = AcpReplayCollector(
+        sessionId: "s1",
+        agentId: "Cursor",
+        initialUserMessageId: null,
+        haltClassifier: ({required text}) =>
+            const AcpHaltNotice(errorName: "cursor_gate", message: "gate"),
+        contentMapper: const AcpContentMapper(),
+      )..consume(upd({
+          "sessionUpdate": "agent_message_chunk",
+          "content": [
+            {"type": "text", "text": "Check your settings to continue"},
+            {"type": "audio", "data": "private", "mimeType": "audio/wav"},
+          ],
+        }));
+
+      final message = collector.build().single;
+      expect(message.info, isA<PluginMessageAssistant>());
+      expect(message.parts.single.text, "Check your settings to continue");
+    });
+
     test("without a halt classifier the same chunk stays assistant text", () {
       final collector = AcpReplayCollector(
         sessionId: "s1",
@@ -450,4 +608,28 @@ void main() {
       expect(message.parts, isNotEmpty);
     });
   });
+}
+
+String _captureWarnings(void Function() action) {
+  final previousLevel = Log.level;
+  final stderr = _BufferingStdout();
+  try {
+    Log.level = LogLevel.warning;
+    IOOverrides.runZoned(action, stderr: () => stderr);
+  } finally {
+    Log.level = previousLevel;
+  }
+  return stderr.text;
+}
+
+class _BufferingStdout implements Stdout {
+  final StringBuffer _buffer = StringBuffer();
+
+  String get text => _buffer.toString();
+
+  @override
+  void writeln([Object? object = ""]) => _buffer.writeln(object);
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => null;
 }
