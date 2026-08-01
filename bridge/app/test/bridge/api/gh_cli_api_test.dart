@@ -8,6 +8,9 @@ import "package:sesori_bridge/src/bridge/foundation/process_runner.dart";
 import "package:sesori_shared/sesori_shared.dart";
 import "package:test/test.dart";
 
+const _githubRepositoryIdentity = "sesori-ai/sesori_apps_monorepo";
+const _githubRepositorySelector = "github.com/$_githubRepositoryIdentity";
+
 void main() {
   group("GhCliApi.isAvailable", () {
     late _FakeProcessRunner processRunner;
@@ -149,6 +152,70 @@ void main() {
     });
   });
 
+  group("GhCliApi.getAuthenticatedIdentity", () {
+    late _FakeProcessRunner processRunner;
+    late GhCliApi service;
+
+    setUp(() {
+      processRunner = _FakeProcessRunner();
+      service = GhCliApi(processRunner: processRunner);
+    });
+
+    test("returns the raw login from the github.com user endpoint", () async {
+      processRunner.enqueueResult(result: _ok(stdout: "  OctoCat\n"));
+
+      final identity = await service.getAuthenticatedIdentity();
+
+      expect(identity.rawLogin, "  OctoCat\n");
+      expect(processRunner.invocations, hasLength(1));
+      expect(processRunner.invocations.single.command, "gh");
+      expect(
+        processRunner.invocations.single.arguments,
+        ["api", "--hostname", "github.com", "user", "--jq", ".login"],
+      );
+      expect(processRunner.invocations.single.workingDirectory, isNull);
+    });
+
+    test("throws a process failure when the identity command fails", () async {
+      processRunner.enqueueResult(result: _fail(exitCode: 1));
+
+      await expectLater(
+        service.getAuthenticatedIdentity(),
+        throwsA(
+          isA<ProcessException>()
+              .having((error) => error.executable, "executable", "gh")
+              .having((error) => error.errorCode, "errorCode", 1),
+        ),
+      );
+    });
+
+    test("preserves an empty login for repository validation", () async {
+      processRunner.enqueueResult(result: _ok(stdout: "  \n"));
+
+      expect((await service.getAuthenticatedIdentity()).rawLogin, "  \n");
+    });
+
+    test("propagates a process failure for the caller to handle", () async {
+      processRunner.enqueueError(
+        error: const ProcessException("gh", <String>["api"], "boom", 1),
+      );
+
+      await expectLater(
+        service.getAuthenticatedIdentity(),
+        throwsA(isA<ProcessException>()),
+      );
+    });
+
+    test("propagates timeout for the caller to handle", () async {
+      processRunner.enqueueError(error: TimeoutException("timed out"));
+
+      await expectLater(
+        service.getAuthenticatedIdentity(),
+        throwsA(isA<TimeoutException>()),
+      );
+    });
+  });
+
   group("GhCliApi.listOpenPrs", () {
     late _FakeProcessRunner processRunner;
     late GhCliApi service;
@@ -166,7 +233,10 @@ void main() {
         ),
       );
 
-      final prs = await service.listOpenPrs(workingDirectory: "/repo");
+      final prs = await service.listOpenPrs(
+        workingDirectory: "/repo",
+        githubRepositoryIdentity: _githubRepositoryIdentity,
+      );
 
       expect(
         prs,
@@ -193,6 +263,8 @@ void main() {
         equals(<String>[
           "pr",
           "list",
+          "--repo",
+          _githubRepositorySelector,
           "--state",
           "open",
           "--json",
@@ -207,7 +279,10 @@ void main() {
     test("returns empty list for empty JSON array", () async {
       processRunner.enqueueResult(result: _ok(stdout: "[]"));
 
-      final prs = await service.listOpenPrs(workingDirectory: "/repo");
+      final prs = await service.listOpenPrs(
+        workingDirectory: "/repo",
+        githubRepositoryIdentity: _githubRepositoryIdentity,
+      );
 
       expect(prs, isEmpty);
     });
@@ -216,7 +291,10 @@ void main() {
       processRunner.enqueueResult(result: _ok(stdout: "not-json"));
 
       expect(
-        () => service.listOpenPrs(workingDirectory: "/repo"),
+        () => service.listOpenPrs(
+          workingDirectory: "/repo",
+          githubRepositoryIdentity: _githubRepositoryIdentity,
+        ),
         throwsA(isA<FormatException>()),
       );
     });
@@ -225,7 +303,10 @@ void main() {
       processRunner.enqueueResult(result: _fail(exitCode: 1));
 
       expect(
-        () => service.listOpenPrs(workingDirectory: "/repo"),
+        () => service.listOpenPrs(
+          workingDirectory: "/repo",
+          githubRepositoryIdentity: _githubRepositoryIdentity,
+        ),
         throwsA(isA<Exception>()),
       );
     });
@@ -234,7 +315,10 @@ void main() {
       processRunner.enqueueError(error: TimeoutException("timed out"));
 
       expect(
-        () => service.listOpenPrs(workingDirectory: "/repo"),
+        () => service.listOpenPrs(
+          workingDirectory: "/repo",
+          githubRepositoryIdentity: _githubRepositoryIdentity,
+        ),
         throwsA(isA<TimeoutException>()),
       );
     });
@@ -245,7 +329,10 @@ void main() {
       );
 
       expect(
-        () => service.listOpenPrs(workingDirectory: "/repo"),
+        () => service.listOpenPrs(
+          workingDirectory: "/repo",
+          githubRepositoryIdentity: _githubRepositoryIdentity,
+        ),
         throwsA(isA<ProcessException>()),
       );
     });
@@ -258,7 +345,10 @@ void main() {
         ),
       );
 
-      final prs = await service.listOpenPrs(workingDirectory: "/repo");
+      final prs = await service.listOpenPrs(
+        workingDirectory: "/repo",
+        githubRepositoryIdentity: _githubRepositoryIdentity,
+      );
 
       expect(prs, hasLength(1));
       expect(prs.single.statusCheckRollup, equals(PrCheckStatus.success));
@@ -272,7 +362,10 @@ void main() {
         ),
       );
 
-      final prs = await service.listOpenPrs(workingDirectory: "/repo");
+      final prs = await service.listOpenPrs(
+        workingDirectory: "/repo",
+        githubRepositoryIdentity: _githubRepositoryIdentity,
+      );
 
       expect(prs, hasLength(1));
       expect(prs.single.statusCheckRollup, equals(PrCheckStatus.unknown));
@@ -296,7 +389,11 @@ void main() {
         ),
       );
 
-      final pr = await service.getPrByNumber(number: 12, workingDirectory: "/repo");
+      final pr = await service.getPrByNumber(
+        number: 12,
+        workingDirectory: "/repo",
+        githubRepositoryIdentity: _githubRepositoryIdentity,
+      );
 
       expect(
         pr,
@@ -322,6 +419,8 @@ void main() {
           "pr",
           "view",
           "12",
+          "--repo",
+          _githubRepositorySelector,
           "--json",
           "number,url,title,state,headRefName,isCrossRepository,mergeable,reviewDecision,statusCheckRollup",
         ]),
@@ -333,7 +432,11 @@ void main() {
       processRunner.enqueueResult(result: _ok(stdout: "{"));
 
       expect(
-        () => service.getPrByNumber(number: 1, workingDirectory: "/repo"),
+        () => service.getPrByNumber(
+          number: 1,
+          workingDirectory: "/repo",
+          githubRepositoryIdentity: _githubRepositoryIdentity,
+        ),
         throwsA(isA<FormatException>()),
       );
     });
@@ -342,7 +445,11 @@ void main() {
       processRunner.enqueueResult(result: _fail(exitCode: 1));
 
       expect(
-        () => service.getPrByNumber(number: 1, workingDirectory: "/repo"),
+        () => service.getPrByNumber(
+          number: 1,
+          workingDirectory: "/repo",
+          githubRepositoryIdentity: _githubRepositoryIdentity,
+        ),
         throwsA(isA<Exception>()),
       );
     });
@@ -351,7 +458,11 @@ void main() {
       processRunner.enqueueError(error: TimeoutException("timed out"));
 
       expect(
-        () => service.getPrByNumber(number: 1, workingDirectory: "/repo"),
+        () => service.getPrByNumber(
+          number: 1,
+          workingDirectory: "/repo",
+          githubRepositoryIdentity: _githubRepositoryIdentity,
+        ),
         throwsA(isA<TimeoutException>()),
       );
     });
@@ -362,7 +473,11 @@ void main() {
       );
 
       expect(
-        () => service.getPrByNumber(number: 1, workingDirectory: "/repo"),
+        () => service.getPrByNumber(
+          number: 1,
+          workingDirectory: "/repo",
+          githubRepositoryIdentity: _githubRepositoryIdentity,
+        ),
         throwsA(isA<ProcessException>()),
       );
     });

@@ -4,6 +4,7 @@ import "package:sesori_plugin_interface/sesori_plugin_interface.dart" show Conso
 import "package:sesori_shared/sesori_shared.dart" show jsonDecodeListMap, jsonDecodeMap;
 
 import "../foundation/process_runner.dart";
+import "gh_authenticated_identity.dart";
 import "gh_pull_request.dart";
 
 class GhCliApi {
@@ -58,6 +59,25 @@ class GhCliApi {
     }
   }
 
+  Future<GhAuthenticatedIdentity> getAuthenticatedIdentity() async {
+    const arguments = ["api", "--hostname", "github.com", "user", "--jq", ".login"];
+    final result = await _processRunner.run(
+      "gh",
+      arguments,
+    );
+    if (result.exitCode != 0) {
+      throw ProcessException(
+        "gh",
+        arguments,
+        result.stderr.toString(),
+        result.exitCode,
+      );
+    }
+
+    _authenticationFailureReported = false;
+    return GhAuthenticatedIdentity(rawLogin: result.stdout.toString());
+  }
+
   void _reportAvailabilityFailure({required String message}) {
     if (_availabilityFailureReported) return;
     _availabilityFailureReported = true;
@@ -73,12 +93,17 @@ class GhCliApi {
     );
   }
 
-  Future<List<GhPullRequest>> listOpenPrs({required String workingDirectory}) async {
+  Future<List<GhPullRequest>> listOpenPrs({
+    required String workingDirectory,
+    required String githubRepositoryIdentity,
+  }) async {
     final result = await _processRunner.run(
       "gh",
-      const <String>[
+      <String>[
         "pr",
         "list",
+        "--repo",
+        "github.com/$githubRepositoryIdentity",
         "--state",
         "open",
         "--json",
@@ -99,6 +124,7 @@ class GhCliApi {
   Future<GhPullRequest> getPrByNumber({
     required int number,
     required String workingDirectory,
+    required String githubRepositoryIdentity,
   }) async {
     final result = await _processRunner.run(
       "gh",
@@ -106,6 +132,8 @@ class GhCliApi {
         "pr",
         "view",
         number.toString(),
+        "--repo",
+        "github.com/$githubRepositoryIdentity",
         "--json",
         "number,url,title,state,headRefName,isCrossRepository,mergeable,reviewDecision,statusCheckRollup",
       ],

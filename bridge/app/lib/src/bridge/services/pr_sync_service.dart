@@ -1,9 +1,10 @@
 import "dart:async";
 
 import "package:clock/clock.dart";
-import "package:sesori_plugin_interface/sesori_plugin_interface.dart" show Log;
+import "package:sesori_plugin_interface/sesori_plugin_interface.dart" show Console, Log;
 
 import "../repositories/models/stored_session.dart";
+import "../repositories/models/verified_github_login.dart";
 import "../repositories/pr_source_repository.dart";
 import "../repositories/pull_request_repository.dart";
 import "../repositories/session_repository.dart";
@@ -16,14 +17,12 @@ class PrSyncService {
   final Duration _debounceWindow;
   final StreamController<String> _prChangesController = StreamController<String>.broadcast();
 
-  final Map<String, ({bool value, DateTime cachedAt})> _hasGitHubRemoteCache =
-      <String, ({bool value, DateTime cachedAt})>{};
   final Map<String, DateTime> _lastRefreshTimes = <String, DateTime>{};
   final Set<String> _activeRefreshes = <String>{};
   ({bool capable, DateTime checkedAt})? _githubCliCapabilityCache;
   Future<bool>? _githubCliCapabilityCheck;
+  bool _identityVerificationFailureReported = false;
 
-  static const _remoteCacheTtl = Duration(minutes: 10);
   static const _githubCliCapabilityCacheTtl = Duration(seconds: 30);
 
   PrSyncService({
@@ -39,6 +38,36 @@ class PrSyncService {
        _debounceWindow = debounceWindow;
 
   Stream<String> get prChanges => _prChangesController.stream;
+
+  Future<VerifiedGithubLogin?> _verifyGithubIdentity() async {
+    try {
+      final identity = await _prSource.getAuthenticatedIdentity();
+      if (identity == null) {
+        _reportIdentityVerificationFailure();
+        return null;
+      }
+      _identityVerificationFailureReported = false;
+      return identity;
+    } on Object catch (error, stackTrace) {
+      _reportIdentityVerificationFailure();
+      Log.w(
+        "[PrSyncService] Failed to verify the active GitHub identity; PR refresh is skipped",
+        error,
+        stackTrace,
+      );
+      return null;
+    }
+  }
+
+  void _reportIdentityVerificationFailure() {
+    if (_identityVerificationFailureReported) return;
+    _identityVerificationFailureReported = true;
+    Console.warning(
+      "GitHub CLI (gh) could not verify the active github.com account. "
+      "GitHub pull request and CI status metadata cannot be refreshed until verification succeeds. "
+      "Run 'gh auth status --hostname github.com' to check authentication and connectivity.",
+    );
+  }
 
   Future<void> triggerRefresh({required String projectId, required String projectPath}) async {
     if (_activeRefreshes.contains(projectId)) {
@@ -58,16 +87,23 @@ class PrSyncService {
         return;
       }
 
-      final cached = _hasGitHubRemoteCache[projectPath];
-      if (cached == null || _clock.now().difference(cached.cachedAt) > _remoteCacheTtl) {
-        final hasRemote = await _prSource.hasGitHubRemote(projectPath: projectPath);
-        _hasGitHubRemoteCache[projectPath] = (value: hasRemote, cachedAt: _clock.now());
-      }
-      if (_hasGitHubRemoteCache[projectPath] case final cachedRemote? when !cachedRemote.value) {
+      final githubRepositoryIdentity = await _prSource.getGithubRepositoryIdentity(
+        projectPath: projectPath,
+      );
+      if (githubRepositoryIdentity == null) {
         return;
       }
 
-      await _refresh(projectId: projectId, projectPath: projectPath);
+      final verifiedGithubLogin = await _verifyGithubIdentity();
+      if (verifiedGithubLogin == null) {
+        return;
+      }
+
+      await _refresh(
+        projectId: projectId,
+        projectPath: projectPath,
+        githubRepositoryIdentity: githubRepositoryIdentity,
+      );
     } finally {
       _activeRefreshes.remove(projectId);
     }
@@ -100,10 +136,17 @@ class PrSyncService {
     return capable;
   }
 
-  Future<void> _refresh({required String projectId, required String projectPath}) async {
+  Future<void> _refresh({
+    required String projectId,
+    required String projectPath,
+    required String githubRepositoryIdentity,
+  }) async {
     try {
       final (openPrs, storedSessions, activePrs) = await (
-        _prSource.listOpenPrs(workingDirectory: projectPath),
+        _prSource.listOpenPrs(
+          workingDirectory: projectPath,
+          githubRepositoryIdentity: githubRepositoryIdentity,
+        ),
         _sessionRepository.getStoredSessionsByProjectId(projectId: projectId),
         _pullRequestRepository.getActivePullRequestsByProjectId(projectId: projectId),
       ).wait;
@@ -147,6 +190,7 @@ class PrSyncService {
           final finalPr = await _prSource.getPrByNumber(
             number: disappeared.prNumber,
             workingDirectory: projectPath,
+            githubRepositoryIdentity: githubRepositoryIdentity,
           );
 
           if (_pullRequestRepository.hasChangedFromExisting(existing: disappeared, pr: finalPr)) {
