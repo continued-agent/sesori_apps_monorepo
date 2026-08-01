@@ -13,6 +13,7 @@ import "package:go_router/go_router.dart";
 import "package:mocktail/mocktail.dart";
 import "package:sesori_dart_core/sesori_dart_core.dart";
 import "package:sesori_mobile/capabilities/voice/voice_transcription_service.dart";
+import "package:sesori_mobile/features/session_detail/widgets/background_tasks_bar.dart";
 import "package:sesori_mobile/features/session_detail/widgets/prompt_editor_sheet.dart";
 import "package:sesori_mobile/features/session_detail/widgets/prompt_input.dart";
 import "package:sesori_mobile/features/session_detail/widgets/session_detail_body.dart";
@@ -88,6 +89,8 @@ SessionDetailLoaded _loadedState({
   required List<SesoriQuestionAsked> pendingQuestions,
   required List<SesoriPermissionAsked> pendingPermissions,
   List<MessageWithParts> messages = const [],
+  List<Session> children = const [],
+  Map<String, SessionStatus> childStatuses = const {},
   SessionStatus sessionStatus = const SessionStatus.idle(),
 }) {
   final provider = testProviderListResponse().items.first;
@@ -100,8 +103,8 @@ SessionDetailLoaded _loadedState({
     sessionTitle: "Session",
     agent: null,
     assistantAgentModel: null,
-    children: const [],
-    childStatuses: const {},
+    children: children,
+    childStatuses: childStatuses,
     isRootSession: true,
     isArchived: false,
     queuedMessages: const [],
@@ -458,6 +461,15 @@ void main() {
   // design.
   FocusNode composerFocus(WidgetTester tester) => tester.widget<EditableText>(find.byType(EditableText)).focusNode;
 
+  Color composerSurfaceBorderColor({required WidgetTester tester, required Finder surface}) {
+    expect(surface, findsOneWidget);
+    final decoratedBox = find.descendant(of: surface, matching: find.byType(DecoratedBox)).first;
+    final decoration = tester.widget<DecoratedBox>(decoratedBox).decoration as BoxDecoration;
+    final border = decoration.border;
+    if (border is! Border) throw TestFailure("Expected a solid composer surface border");
+    return border.top.color;
+  }
+
   // A fresh session rests in the hold-to-talk pill, which hosts no text field;
   // the keyboard button switches the composer to its typing layout and focuses
   // the field (focus lands post-frame).
@@ -604,6 +616,131 @@ void main() {
     expect(find.text("Hold to talk"), findsOneWidget);
   });
 
+  testWidgets("picker pills and task card follow the composer surface style", (tester) async {
+    final state = _loadedState(
+      pendingQuestions: const [],
+      pendingPermissions: const [],
+      children: [testSession(id: "child-1", title: "Child task", parentID: "session-1")],
+    );
+    when(() => cubit.state).thenReturn(state);
+    whenListen(cubit, const Stream<SessionDetailState>.empty(), initialState: state);
+
+    await tester.pumpWidget(_buildApp(cubit: cubit));
+    await tester.pumpAndSettle();
+
+    final picker = find.byType(PregoPickerButton).first;
+    final taskCard = find.descendant(
+      of: find.byType(BackgroundTasksBar),
+      matching: find.byType(PregoCard),
+    );
+    expect(
+      composerSurfaceBorderColor(tester: tester, surface: picker),
+      PregoColorsLight.borderSecondary,
+    );
+    expect(
+      composerSurfaceBorderColor(tester: tester, surface: taskCard),
+      PregoColorsLight.borderSecondary,
+    );
+
+    await tester.tap(find.byIcon(TablerRegular.keyboard));
+    await tester.pump();
+
+    // Adjacent surfaces switch in the same frame as the composer rather than
+    // briefly retaining the previous outline treatment.
+    expect(
+      composerSurfaceBorderColor(tester: tester, surface: picker),
+      PregoColorsLight.borderPrimary,
+    );
+    expect(
+      composerSurfaceBorderColor(tester: tester, surface: taskCard),
+      PregoColorsLight.borderPrimary,
+    );
+
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(EditableText), "draft");
+    composerFocus(tester).unfocus();
+    await tester.pumpAndSettle();
+
+    expect(
+      composerSurfaceBorderColor(tester: tester, surface: picker),
+      PregoColorsLight.borderPrimary,
+    );
+    expect(
+      composerSurfaceBorderColor(tester: tester, surface: taskCard),
+      PregoColorsLight.borderPrimary,
+    );
+
+    await tester.tap(find.text("draft"));
+    await tester.enterText(find.byType(EditableText), "");
+    composerFocus(tester).unfocus();
+    await tester.pumpAndSettle();
+
+    expect(
+      composerSurfaceBorderColor(tester: tester, surface: picker),
+      PregoColorsLight.borderSecondary,
+    );
+    expect(
+      composerSurfaceBorderColor(tester: tester, surface: taskCard),
+      PregoColorsLight.borderSecondary,
+    );
+  });
+
+  testWidgets("parent-driven staged command changes update adjacent surface styles", (tester) async {
+    var state = _loadedState(
+      pendingQuestions: const [],
+      pendingPermissions: const [],
+      children: [testSession(id: "child-1", title: "Child task", parentID: "session-1")],
+    );
+    final stateController = StreamController<SessionDetailState>.broadcast();
+    addTearDown(stateController.close);
+    when(() => cubit.state).thenAnswer((_) => state);
+    when(() => cubit.stream).thenAnswer((_) => stateController.stream);
+
+    await tester.pumpWidget(_buildApp(cubit: cubit));
+    await tester.pumpAndSettle();
+
+    final picker = find.byType(PregoPickerButton).first;
+    final taskCard = find.descendant(
+      of: find.byType(BackgroundTasksBar),
+      matching: find.byType(PregoCard),
+    );
+    expect(
+      composerSurfaceBorderColor(tester: tester, surface: picker),
+      PregoColorsLight.borderSecondary,
+    );
+    expect(
+      composerSurfaceBorderColor(tester: tester, surface: taskCard),
+      PregoColorsLight.borderSecondary,
+    );
+
+    state = state.copyWith(stagedCommand: testCommandInfo());
+    stateController.add(state);
+    await tester.pumpAndSettle();
+
+    expect(find.byType(EditableText), findsOneWidget);
+    expect(
+      composerSurfaceBorderColor(tester: tester, surface: taskCard),
+      PregoColorsLight.borderPrimary,
+    );
+
+    composerFocus(tester).unfocus();
+    await tester.pumpAndSettle();
+
+    state = state.copyWith(stagedCommand: null);
+    stateController.add(state);
+    await tester.pumpAndSettle();
+
+    expect(find.byType(EditableText), findsNothing);
+    expect(
+      composerSurfaceBorderColor(tester: tester, surface: picker),
+      PregoColorsLight.borderSecondary,
+    );
+    expect(
+      composerSurfaceBorderColor(tester: tester, surface: taskCard),
+      PregoColorsLight.borderSecondary,
+    );
+  });
+
   testWidgets("voice-first session with messages still rests in hold-to-talk", (tester) async {
     final state = _loadedState(
       pendingQuestions: const [],
@@ -645,6 +782,10 @@ void main() {
 
   testWidgets("text-first fresh session rests as a tap-to-type field with the mic alongside", (tester) async {
     await tester.pumpWidget(_buildApp(cubit: cubit, chatInputMode: ChatInputMode.textFirst));
+    expect(
+      composerSurfaceBorderColor(tester: tester, surface: find.byType(PregoPickerButton).first),
+      PregoColorsLight.borderPrimary,
+    );
     await tester.pumpAndSettle();
 
     expect(find.text("Hold to talk"), findsNothing);
@@ -1287,6 +1428,10 @@ void main() {
     await tester.pumpWidget(_buildApp(cubit: cubit, chatInputModeCubit: modeCubit));
     await tester.pumpAndSettle();
     expect(find.text("Hold to talk"), findsOneWidget);
+    expect(
+      composerSurfaceBorderColor(tester: tester, surface: find.byType(PregoPickerButton).first),
+      PregoColorsLight.borderSecondary,
+    );
 
     await modeCubit.select(mode: ChatInputMode.textFirst);
     await tester.pumpAndSettle();
@@ -1294,6 +1439,10 @@ void main() {
     expect(find.text("Hold to talk"), findsNothing);
     expect(find.text("Ask anything..."), findsOneWidget);
     expect(find.byIcon(TablerRegular.microphone), findsOneWidget);
+    expect(
+      composerSurfaceBorderColor(tester: tester, surface: find.byType(PregoPickerButton).first),
+      PregoColorsLight.borderPrimary,
+    );
   });
 
   testWidgets("holding the typing container's voice pill records while the text stays", (tester) async {
