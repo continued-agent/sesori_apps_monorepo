@@ -4,11 +4,11 @@
 
 - **Plan slug:** `output-image-support`
 - **Implementation base:** `origin/main` at
-  `e64fb4b5d6daeee55447efdf0177318daece5932`
-- **Series state:** Step 10/13 merged as [PR #666](https://github.com/sesori-ai/sesori_apps_monorepo/pull/666)
-- **Current step:** Step 11/13 — [PR #670](https://github.com/sesori-ai/sesori_apps_monorepo/pull/670) open; local review fixes verified
+  `db7d62c666f88a63a05acd28fe6b8816dd6afc56`
+- **Series state:** Step 11/13 merged as [PR #670](https://github.com/sesori-ai/sesori_apps_monorepo/pull/670) (`db7d62c6`)
+- **Current step:** Step 12/13 open as [PR #674](https://github.com/sesori-ai/sesori_apps_monorepo/pull/674)
 - **Plan PR:** [#638](https://github.com/sesori-ai/sesori_apps_monorepo/pull/638)
-- **Next action:** review and publish the local PR feedback fixes
+- **Next action:** monitor PR #674 and address CI or review findings
 
 ## Plan Review
 
@@ -36,8 +36,8 @@
 | [x] | 8/13 | `output-image-support-acp-content-blocks` | `[output-image-support] refactor(acp): type content blocks [step 8/13]` | 1,300-1,500 | [PR #658](https://github.com/sesori-ai/sesori_apps_monorepo/pull/658) merged as `a973796c`; 1,119 changed lines |
 | [x] | 9/13 | `output-image-support-acp-content-mapping` | `[output-image-support] refactor(acp): centralize tool content mapping [step 9/13]` | 1,100-1,500 | [PR #661](https://github.com/sesori-ai/sesori_apps_monorepo/pull/661) merged as `f5f24240`; 879 changed lines |
 | [x] | 10/13 | `output-image-support-acp-message-images` | `[output-image-support] feat(acp): surface live message images [step 10/13]` | 1,100-1,500 | [PR #666](https://github.com/sesori-ai/sesori_apps_monorepo/pull/666) merged as `e64fb4b5`; 1,138 changed lines |
-| [ ] | 11/13 | `output-image-support-acp-tool-images` | `⚙️ [output-image-support] feat(acp): surface live tool images [step 11/13]` | 1,200-1,500 | [PR #670](https://github.com/sesori-ai/sesori_apps_monorepo/pull/670) open; local review fixes verified |
-| [ ] | 12/13 | `output-image-support-acp-image-replay` | `[output-image-support] feat(acp): restore output image replay [step 12/13]` | 900-1,400 | Blocked on Step 11 merge |
+| [x] | 11/13 | `output-image-support-acp-tool-images` | `⚙️ [output-image-support] feat(acp): surface live tool images [step 11/13]` | 1,200-1,500 | [PR #670](https://github.com/sesori-ai/sesori_apps_monorepo/pull/670) merged as `db7d62c6`; 1,477 changed lines |
+| [ ] | 12/13 | `output-image-support-acp-image-replay` | `⚙️ [output-image-support] feat(acp): restore output image replay [step 12/13]` | 900-1,400 | [PR #674](https://github.com/sesori-ai/sesori_apps_monorepo/pull/674) open; architecture review approved |
 | [ ] | 13/13 | `output-image-support-retire-plan` | `[output-image-support] docs: retire output image support plan [step 13/13]` | 50-200 | Blocked on Step 12 merge |
 
 ## Exact PR Titles
@@ -53,7 +53,7 @@
 9. `[output-image-support] refactor(acp): centralize tool content mapping [step 9/13]`
 10. `[output-image-support] feat(acp): surface live message images [step 10/13]`
 11. `⚙️ [output-image-support] feat(acp): surface live tool images [step 11/13]`
-12. `[output-image-support] feat(acp): restore output image replay [step 12/13]`
+12. `⚙️ [output-image-support] feat(acp): restore output image replay [step 12/13]`
 13. `[output-image-support] docs: retire output image support plan [step 13/13]`
 
 ## Execution Rules
@@ -242,6 +242,33 @@
   all 109 Cursor tests pass; fatal analysis passes in both packages, and focused
   tests plus `git diff --check` pass. The final 1,477-line PR diff remains below the
   1,500-line soft cap; no neighboring scope was combined.
+- Step 12/13 (2026-08-01): materialized the assistant image mutations already
+  recorded by `AcpContentTracker` as ordered replay file parts and exposed the
+  final attachments already owned by each replay `AcpToolContentTracker`.
+  Replay-only payload stripping and its now-obsolete boundary type were removed;
+  content parsing, validation, count/byte limits, replacement semantics, and
+  privacy-safe metadata remain owned by the existing mapper and trackers.
+  Live/replay assistant and tool parity tables cover mixed order, inline and
+  metadata images, partial updates, image-only replacement, and reordered base
+  calls. A dedicated replay-client `getSessionMessages` test covers assistant
+  and tool attachments across chronological tool boundaries. PR review found
+  that a stamped assistant draft materialized all content before all tools.
+  Replay now retains sealed content/tool chronology entries, keeps each tool's
+  first-seen marker while later or reordered calls mutate its one ID-keyed
+  state, and closes text parts at markers without splitting explicit ACP
+  message-ID grouping. The requested text/tool/image and image/tool/text
+  regressions failed before the fix; text/tool/text additionally covers unique
+  split part IDs. The 60 focused replay/history/tracker tests, all 216 ACP tests,
+  all 109 Cursor tests, and fatal analysis in both packages pass.
+  Both initial and post-review `aristotle-impl-review` passes approved with no
+  findings.
+  No code generation was required; Cursor production code and its dropped
+  `cursor/generate_image` extension remain unchanged. Analytics remain excluded
+  because passive rendering has no authoritative user action and image or tool
+  metadata is privacy-sensitive. `git diff --check` passes.
+  The exact Step 12 diff is 1,419 changed lines (1,032 additions, 387
+  deletions), below the 1,500-line soft cap; this excludes the pre-existing
+  unrelated modified `fetch.sh` and untracked Step 6 test notes.
 
 ## Findings And Plan Deltas
 
