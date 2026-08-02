@@ -1,3 +1,4 @@
+import "dart:async";
 import "dart:collection";
 import "dart:io";
 
@@ -10,6 +11,7 @@ import "package:sesori_bridge/src/bridge/foundation/process_runner.dart";
 import "package:sesori_bridge/src/bridge/repositories/models/verified_github_login.dart";
 import "package:sesori_bridge/src/bridge/repositories/pr_source_repository.dart";
 import "package:sesori_bridge/src/repositories/models/pull_request_selection.dart";
+import "package:sesori_bridge/src/repositories/models/pull_request_target.dart";
 import "package:sesori_shared/sesori_shared.dart";
 import "package:test/test.dart";
 
@@ -35,24 +37,28 @@ void main() {
       expect(await repository.getAuthenticatedIdentity(), isNull);
     });
 
-    test("returns a canonical lowercase GitHub owner/repository identity", () async {
+    test("resolves a named branch and canonical GitHub repository target", () async {
       final repository = _repository(
         ghResults: const [],
         gitResults: [
+          _result(stdout: "Feature/Current\n"),
           _result(stdout: "true\n"),
           _result(stdout: "origin\n"),
           _result(stdout: "git@GitHub.com:Sesori-AI/Sesori_Apps_Monorepo.git\n"),
+          _result(stdout: "Feature/Current\n"),
         ],
       );
 
-      final identity = await repository.getGithubRepositoryIdentity(
-        projectPath: "/repo",
+      final targets = await repository.resolvePullRequestTargets(
+        directories: const ["/repo"],
       );
 
-      expect(identity, "sesori-ai/sesori_apps_monorepo");
+      final target = targets["/repo"]! as PullRequestGithubDirectoryTarget;
+      expect(target.target.githubRepositoryIdentity, "sesori-ai/sesori_apps_monorepo");
+      expect(target.target.branchName, "Feature/Current");
     });
 
-    test("rejects non-GitHub and nested repository identities", () async {
+    test("keeps named branches without a supported GitHub remote", () async {
       for (final remoteUrl in [
         "https://gitlab.com/sesori-ai/sesori_apps_monorepo.git",
         "https://github.com/sesori-ai/mobile/sesori_apps_monorepo.git",
@@ -60,18 +66,145 @@ void main() {
         final repository = _repository(
           ghResults: const [],
           gitResults: [
+            _result(stdout: "feature/current\n"),
             _result(stdout: "true\n"),
             _result(stdout: "origin\n"),
             _result(stdout: "$remoteUrl\n"),
+            _result(stdout: "feature/current\n"),
           ],
         );
 
-        expect(
-          await repository.getGithubRepositoryIdentity(projectPath: "/repo"),
-          isNull,
-          reason: remoteUrl,
+        final targets = await repository.resolvePullRequestTargets(
+          directories: const ["/repo"],
         );
+        expect(targets["/repo"], isA<PullRequestLocalBranchDirectoryTarget>(), reason: remoteUrl);
       }
+    });
+
+    test("deduplicates exact directories and classifies branch absence", () async {
+      final detachedAndPlain = _repository(
+        ghResults: const [],
+        gitResults: [
+          ProcessResult(1, 1, "", ""),
+          ProcessResult(2, 128, "", "fatal: not a git repository"),
+        ],
+      );
+
+      final targets = await detachedAndPlain.resolvePullRequestTargets(
+        directories: const ["/plain", "/detached", "/detached"],
+      );
+
+      expect(
+        (targets["/detached"]! as PullRequestNoBranchDirectoryTarget).reason,
+        PullRequestNoBranchReason.detachedHead,
+      );
+      expect(
+        (targets["/plain"]! as PullRequestNoBranchDirectoryTarget).reason,
+        PullRequestNoBranchReason.notGitRepository,
+      );
+
+      final missing = _repository(
+        ghResults: const [],
+        gitResults: const [],
+        gitPathExists: false,
+      );
+      final missingTargets = await missing.resolvePullRequestTargets(
+        directories: const ["/missing"],
+      );
+      expect(
+        (missingTargets["/missing"]! as PullRequestNoBranchDirectoryTarget).reason,
+        PullRequestNoBranchReason.missingDirectory,
+      );
+    });
+
+    test("bounds concurrent deduplicated directory resolution and preserves sorted output", () async {
+      final sortedDirectories = [
+        for (var index = 0; index < 9; index++) "/directory-${index.toString().padLeft(2, "0")}",
+      ];
+      final branchResults = {
+        for (final directory in sortedDirectories) directory: Completer<GitCurrentBranchResult>(),
+      };
+      final gitCli = _CompletingGitCliApi(
+        branchResults: branchResults,
+      );
+      final repository = PrSourceRepository(
+        ghCli: _FakeGhCliApi(initialResponses: const []),
+        gitCli: gitCli,
+      );
+
+      final resolution = repository.resolvePullRequestTargets(
+        directories: [...sortedDirectories.reversed, sortedDirectories.last],
+      );
+      await gitCli.resolutionLimitReached.future;
+
+      expect(gitCli.branchCalls, sortedDirectories.take(8));
+      expect(gitCli.nextChunkStarted.isCompleted, isFalse);
+      for (final directory in sortedDirectories.take(8)) {
+        branchResults[directory]!.complete(const GitCurrentBranchDetached());
+      }
+
+      await gitCli.nextChunkStarted.future;
+      expect(gitCli.branchCalls, sortedDirectories);
+      branchResults[sortedDirectories.last]!.complete(const GitCurrentBranchNotRepository());
+
+      final targets = await resolution;
+      expect(targets.keys, sortedDirectories);
+      expect(targets, hasLength(9));
+      expect(
+        (targets[sortedDirectories.last]! as PullRequestNoBranchDirectoryTarget).reason,
+        PullRequestNoBranchReason.notGitRepository,
+      );
+    });
+
+    test("returns a typed branch failure when checkout changes during resolution", () async {
+      final gitCli = _BranchChangingGitCliApi();
+      final repository = PrSourceRepository(
+        ghCli: _FakeGhCliApi(initialResponses: const []),
+        gitCli: gitCli,
+      );
+
+      final resolution = repository.resolvePullRequestTargets(
+        directories: const ["/repo"],
+      );
+      await gitCli.remoteReadStarted.future;
+      gitCli.allowRemoteRead.complete();
+
+      expect((await resolution)["/repo"], isA<PullRequestBranchChangedDuringResolution>());
+      expect(gitCli.branchCalls, 2);
+    });
+
+    test("retains a named branch when repository resolution fails", () async {
+      final repository = _repository(
+        ghResults: const [],
+        gitResults: [
+          _result(stdout: "feature/current\n"),
+          ProcessResult(2, 2, "", "unexpected remote failure"),
+        ],
+      );
+
+      final targets = await repository.resolvePullRequestTargets(
+        directories: const ["/repo"],
+      );
+
+      final failed = targets["/repo"]! as PullRequestRepositoryResolutionFailed;
+      expect(failed.branchName, "feature/current");
+      expect(failed.error.innerError, isA<ProcessException>());
+      expect(failed.error.toString(), isNot(contains("unexpected remote failure")));
+    });
+
+    test("returns a typed failure when the current branch command fails", () async {
+      final repository = _repository(
+        ghResults: const [],
+        gitResults: [ProcessResult(1, 2, "", "unexpected branch failure")],
+      );
+
+      final targets = await repository.resolvePullRequestTargets(
+        directories: const ["/repo"],
+      );
+
+      final failed = targets["/repo"]! as PullRequestBranchResolutionFailed;
+      expect(failed.error.innerError, isA<ProcessException>());
+      expect(failed.error.toString(), isNot(contains("unexpected branch failure")));
     });
 
     test("selects newest open by creation time and number before terminal", () async {
@@ -446,12 +579,13 @@ GhPullRequest _pullRequest({
 PrSourceRepository _repository({
   required List<ProcessResult> ghResults,
   required List<ProcessResult> gitResults,
+  bool gitPathExists = true,
 }) {
   return PrSourceRepository(
     ghCli: GhCliApi(processRunner: _QueueProcessRunner(results: ghResults)),
     gitCli: GitCliApi(
       processRunner: _QueueProcessRunner(results: gitResults),
-      gitPathExists: ({required String gitPath}) => true,
+      gitPathExists: ({required String gitPath}) => gitPathExists,
     ),
   );
 }
@@ -522,4 +656,51 @@ class _QueueProcessRunner extends ProcessRunner {
     }
     return _results.removeFirst();
   }
+}
+
+final class _CompletingGitCliApi implements GitCliApi {
+  final Map<String, Completer<GitCurrentBranchResult>> branchResults;
+  final List<String> branchCalls = <String>[];
+  final Completer<void> resolutionLimitReached = Completer<void>();
+  final Completer<void> nextChunkStarted = Completer<void>();
+
+  _CompletingGitCliApi({required this.branchResults});
+
+  @override
+  Future<GitCurrentBranchResult> getCurrentBranch({required String projectPath}) {
+    branchCalls.add(projectPath);
+    if (branchCalls.length == 8) {
+      resolutionLimitReached.complete();
+    } else if (branchCalls.length == 9) {
+      nextChunkStarted.complete();
+    }
+    return branchResults[projectPath]!.future;
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+final class _BranchChangingGitCliApi implements GitCliApi {
+  final Completer<void> remoteReadStarted = Completer<void>();
+  final Completer<void> allowRemoteRead = Completer<void>();
+  int branchCalls = 0;
+
+  @override
+  Future<GitCurrentBranchResult> getCurrentBranch({required String projectPath}) async {
+    branchCalls++;
+    return GitCurrentBranchNamed(
+      branchName: branchCalls == 1 ? "feature/old" : "feature/new",
+    );
+  }
+
+  @override
+  Future<String?> getRemoteUrl({required String projectPath}) async {
+    remoteReadStarted.complete();
+    await allowRemoteRead.future;
+    return "git@github.com:sesori-ai/sesori_apps_monorepo.git";
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

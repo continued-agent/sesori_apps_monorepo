@@ -26,6 +26,7 @@ import "package:sesori_bridge/src/bridge/services/pr_sync_service.dart";
 import "package:sesori_bridge/src/bridge/services/session_unseen_service.dart";
 import "package:sesori_bridge/src/bridge/services/session_view_tracker.dart";
 import "package:sesori_bridge/src/repositories/models/pull_request_selection.dart";
+import "package:sesori_bridge/src/repositories/models/pull_request_target.dart";
 import "package:sesori_plugin_interface/sesori_plugin_interface.dart";
 import "package:sesori_shared/sesori_shared.dart" hide PermissionReply;
 
@@ -561,9 +562,10 @@ class FakePullRequestRepository implements PullRequestRepository {
   }
 
   @override
-  Future<bool> replaceScopedPullRequests({
+  Future<PullRequestReplacementOutcome> replaceScopedPullRequests({
     required String projectId,
     required VerifiedGithubLogin verifiedGithubLogin,
+    required Map<String, String> capturedRootDirectoriesBySessionId,
     required List<PullRequestTargetSelection> targetSelections,
     required int lastCheckedAt,
   }) async {
@@ -593,7 +595,7 @@ class FakePullRequestRepository implements PullRequestRepository {
           )] =
           record;
     }
-    return true;
+    return const PullRequestReplacementApplied(changed: true);
   }
 
   String _key({
@@ -605,26 +607,25 @@ class FakePullRequestRepository implements PullRequestRepository {
   }
 
   @override
-  Future<bool> prepareScopedRefresh({
-    required String projectId,
-    required String githubRepositoryIdentity,
+  Future<Set<String>> prepareScopedRefresh({
+    required Set<String> projectIds,
     required VerifiedGithubLogin verifiedGithubLogin,
-    required List<StoredSession> sessions,
-  }) async => false;
+  }) async => const <String>{};
 
   @override
-  Future<bool> clearScopedRefresh({
-    required String projectId,
-    required List<StoredSession> sessions,
-  }) async => false;
+  Future<Set<String>> applyResolvedTargets({
+    required Map<String, List<StoredSession>> sessionsByProject,
+    required Map<String, PullRequestDirectoryTarget> targetsByDirectory,
+  }) async => const <String>{};
 }
 
 class FakePrSyncService extends PrSyncService {
-  final List<({String projectId, String projectPath})> calls = <({String projectId, String projectPath})>[];
+  final List<({Set<String> projectIds, PrRefreshPolicy refreshPolicy})> calls = [];
   final Duration? delay;
   final Object? refreshError;
   final PrRefreshOutcome refreshOutcome;
   final List<Duration> identityVerificationDelays;
+  final FutureOr<void> Function()? refreshAction;
   VerifiedGithubLogin? verifiedGithubLogin;
   int identityVerificationCallCount = 0;
 
@@ -633,6 +634,7 @@ class FakePrSyncService extends PrSyncService {
     this.refreshError,
     this.refreshOutcome = PrRefreshOutcome.completed,
     this.identityVerificationDelays = const <Duration>[],
+    this.refreshAction,
     VerifiedGithubLogin? verifiedGithubLogin,
     PrSourceRepository? prSource,
     PullRequestRepository? pullRequestRepository,
@@ -646,14 +648,21 @@ class FakePrSyncService extends PrSyncService {
        );
 
   @override
-  Future<PrRefreshOutcome> triggerRefresh({required String projectId, required String projectPath}) async {
-    calls.add((projectId: projectId, projectPath: projectPath));
+  Future<PrRefreshOutcome> triggerRefresh({
+    required Set<String> projectIds,
+    required PrRefreshPolicy refreshPolicy,
+  }) async {
+    calls.add((
+      projectIds: Set<String>.from(projectIds),
+      refreshPolicy: refreshPolicy,
+    ));
     if (delay != null) {
       await Future<void>.delayed(delay!);
     }
     if (refreshError case final error?) {
       throw error;
     }
+    await refreshAction?.call();
     return refreshOutcome;
   }
 
@@ -676,7 +685,14 @@ class _AlwaysReadyPrSource implements PrSourceRepository {
   @override
   Future<VerifiedGithubLogin?> getAuthenticatedIdentity() async => VerifiedGithubLogin.tryParse(rawLogin: "octocat");
   @override
-  Future<String?> getGithubRepositoryIdentity({required String projectPath}) async => "sesori-ai/test";
+  Future<Map<String, PullRequestDirectoryTarget>> resolvePullRequestTargets({
+    required Iterable<String> directories,
+  }) async => {
+    for (final directory in directories)
+      directory: const PullRequestGithubDirectoryTarget(
+        target: (githubRepositoryIdentity: "sesori-ai/test", branchName: "main"),
+      ),
+  };
   @override
   Future<PullRequestSelectionOutcome> selectPullRequests({
     required List<PullRequestSelectionTarget> targets,
@@ -688,26 +704,25 @@ class _AlwaysReadyPrSource implements PrSourceRepository {
 
 class _NoopPullRequestRepository implements PullRequestRepository {
   @override
-  Future<bool> replaceScopedPullRequests({
+  Future<PullRequestReplacementOutcome> replaceScopedPullRequests({
     required String projectId,
     required VerifiedGithubLogin verifiedGithubLogin,
+    required Map<String, String> capturedRootDirectoriesBySessionId,
     required List<PullRequestTargetSelection> targetSelections,
     required int lastCheckedAt,
-  }) async => false;
+  }) async => const PullRequestReplacementApplied(changed: false);
 
   @override
-  Future<bool> prepareScopedRefresh({
-    required String projectId,
-    required String githubRepositoryIdentity,
+  Future<Set<String>> prepareScopedRefresh({
+    required Set<String> projectIds,
     required VerifiedGithubLogin verifiedGithubLogin,
-    required List<StoredSession> sessions,
-  }) async => false;
+  }) async => const <String>{};
 
   @override
-  Future<bool> clearScopedRefresh({
-    required String projectId,
-    required List<StoredSession> sessions,
-  }) async => false;
+  Future<Set<String>> applyResolvedTargets({
+    required Map<String, List<StoredSession>> sessionsByProject,
+    required Map<String, PullRequestDirectoryTarget> targetsByDirectory,
+  }) async => const <String>{};
 }
 
 Session _deletedSession(String sessionId) => Session(
@@ -1023,6 +1038,7 @@ class FakeSessionRepository implements SessionRepository {
   final FakePullRequestRepository _pullRequestRepository;
   final AppDatabase? _persistenceDatabase;
   int getSessionsCallCount = 0;
+  int enrichSessionsCallCount = 0;
   ({String projectId, int? start, int? limit})? lastGetSessionsArgs;
   VerifiedGithubLogin? lastVerifiedGithubLogin;
   String? projectPathResult;
@@ -1210,6 +1226,7 @@ class FakeSessionRepository implements SessionRepository {
     required List<Session> sessions,
     required VerifiedGithubLogin? verifiedGithubLogin,
   }) async {
+    enrichSessionsCallCount++;
     lastVerifiedGithubLogin = verifiedGithubLogin;
     final sessionIds = sessions.map((session) => session.id).toList(growable: false);
     final dbSessions = await _sessionDao.getSessionsByIds(sessionIds: sessionIds);
