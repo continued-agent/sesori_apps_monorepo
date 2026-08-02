@@ -27,7 +27,8 @@ void main() {
     final harness = await _OrchestratorHarness.create(pluginIds: const ["one", "two"]);
     addTearDown(harness.close);
 
-    final response = await harness.composition.session.router.route(makeRequest("GET", "/plugin"));
+    final response =
+        (await harness.composition.session.router.route(request: makeRequest("GET", "/plugin")).completion).response;
     final plugins = PluginListResponse.fromJson(jsonDecodeMap(response.body!)).plugins;
 
     expect(response.status, 200);
@@ -56,15 +57,19 @@ void main() {
     final harness = await _OrchestratorHarness.create(pluginIds: const ["one"]);
     addTearDown(harness.close);
 
-    final response = await harness.composition.session.router.route(
-      makeRequest(
-        "PATCH",
-        "/plugin/idle-timeout",
-        body: jsonEncode(
-          const PluginIdleTimeoutUpdateRequest.setOverride(pluginId: "one", idleTimeoutMins: 25).toJson(),
-        ),
-      ),
-    );
+    final response =
+        (await harness.composition.session.router
+                .route(
+                  request: makeRequest(
+                    "PATCH",
+                    "/plugin/idle-timeout",
+                    body: jsonEncode(
+                      const PluginIdleTimeoutUpdateRequest.setOverride(pluginId: "one", idleTimeoutMins: 25).toJson(),
+                    ),
+                  ),
+                )
+                .completion)
+            .response;
     final management = PluginManagementResponse.fromJson(jsonDecodeMap(response.body!));
 
     expect(response.status, 200);
@@ -76,13 +81,17 @@ void main() {
     final harness = await _OrchestratorHarness.create(pluginIds: const ["one"]);
     addTearDown(harness.close);
 
-    final response = await harness.composition.session.router.route(
-      makeRequest(
-        "POST",
-        "/plugin/missing/command",
-        body: jsonEncode(const PluginLifecycleCommandRequest.disable(mode: PluginStopMode.safe).toJson()),
-      ),
-    );
+    final response =
+        (await harness.composition.session.router
+                .route(
+                  request: makeRequest(
+                    "POST",
+                    "/plugin/missing/command",
+                    body: jsonEncode(const PluginLifecycleCommandRequest.disable(mode: PluginStopMode.safe).toJson()),
+                  ),
+                )
+                .completion)
+            .response;
 
     expect(response.status, 404);
     expect(response.body, "plugin not found");
@@ -687,7 +696,6 @@ class _OrchestratorHarness {
     final runtime = BridgeRuntime(
       database: database,
       failureReporter: failureReporter,
-      restartService: restartService,
       composition: composition,
     );
     return _OrchestratorHarness(
