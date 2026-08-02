@@ -85,6 +85,7 @@ class PromptInput extends StatefulWidget {
 class _PromptInputState extends State<PromptInput> {
   static const _draftCalculator = ComposerDraftCalculator();
   static const _minimumRecordingDuration = Duration(milliseconds: 200);
+  static const _completionFeedbackPulseDelay = Duration(milliseconds: 100);
   final _controller = TextEditingController();
   final _textScrollController = ScrollController();
   final _focusNode = FocusNode();
@@ -101,6 +102,10 @@ class _PromptInputState extends State<PromptInput> {
   /// recorder on touch-down without Flutter's long-press recognition delay.
   int? _recordingPointer;
   Offset? _recordingPointerPosition;
+
+  /// Keeps the cancel commitment from buzzing repeatedly while the pointer
+  /// remains inside the target. Cleared when the pointer leaves.
+  bool _dismissFeedbackPlayed = false;
 
   /// Keeps the typing layout mounted after the keyboard affordance was tapped
   /// while the field wasn't in the tree yet (hold-to-talk / compact layouts),
@@ -362,6 +367,9 @@ class _PromptInputState extends State<PromptInput> {
 
   Future<void> _handleRecordStart() async {
     if (_voiceState != _VoiceState.idle || _isRecordStartInFlight || _isCancelInFlight) return;
+    _dismissFeedbackPlayed = false;
+    // Fire before recorder startup or rebuilding so touch-down feels immediate.
+    unawaited(_playHapticFeedback(play: HapticFeedback.lightImpact));
     final pinnedVoiceLayout = _restingLayout;
     _voiceInteractionId++;
     _minimumRecordingDurationTimer?.cancel();
@@ -419,7 +427,13 @@ class _PromptInputState extends State<PromptInput> {
   /// toward the cancel target.
   void _handleRecordDragUpdate({required Offset globalPosition}) {
     if (_displayedVoiceState != _VoiceState.recording) return;
-    _cancelDragProgress.value = _cancelProgressFor(globalPosition: globalPosition);
+    final progress = _cancelProgressFor(globalPosition: globalPosition);
+    if (progress >= 1) {
+      _playDismissFeedback();
+    } else {
+      _dismissFeedbackPlayed = false;
+    }
+    _cancelDragProgress.value = progress;
   }
 
   /// The finger starts engaging the cancel affordance within this distance of
@@ -514,6 +528,8 @@ class _PromptInputState extends State<PromptInput> {
     // long before a slow upload errors out); every continuation below is a
     // no-op once a newer interaction owns the composer.
     final interactionId = _voiceInteractionId;
+    _dismissFeedbackPlayed = false;
+    unawaited(_playCompletionFeedback(interactionId: interactionId));
     _minimumRecordingDurationTimer?.cancel();
     _minimumRecordingDurationTimer = null;
     _updateComposerState(
@@ -593,6 +609,11 @@ class _PromptInputState extends State<PromptInput> {
 
   /// Discards the running voice interaction: a drag released on the cancel
   /// target, a tap on it mid-recording, or a tap on the X while transcribing.
+  Future<void> _cancelVoiceInteractionWithFeedback() async {
+    _playDismissFeedback();
+    await _cancelVoiceInteraction();
+  }
+
   Future<void> _cancelVoiceInteraction() async {
     if (_isRecordStartInFlight) {
       // Cancelling the service before its start future settles can let native
@@ -625,6 +646,27 @@ class _PromptInputState extends State<PromptInput> {
       loge("Failed to cancel the voice interaction", error);
     } finally {
       _isCancelInFlight = false;
+    }
+  }
+
+  void _playDismissFeedback() {
+    if (_dismissFeedbackPlayed) return;
+    _dismissFeedbackPlayed = true;
+    unawaited(_playHapticFeedback(play: HapticFeedback.selectionClick));
+  }
+
+  Future<void> _playCompletionFeedback({required int interactionId}) async {
+    await _playHapticFeedback(play: HapticFeedback.lightImpact);
+    await Future<void>.delayed(_completionFeedbackPulseDelay);
+    if (!mounted || interactionId != _voiceInteractionId) return;
+    await _playHapticFeedback(play: HapticFeedback.heavyImpact);
+  }
+
+  static Future<void> _playHapticFeedback({required Future<void> Function() play}) async {
+    try {
+      await play();
+    } on Object catch (error, stackTrace) {
+      logw("Failed to play voice haptic feedback", error, stackTrace);
     }
   }
 
@@ -1219,7 +1261,7 @@ class _PromptInputState extends State<PromptInput> {
         child: VoiceCancelButton(
           key: _cancelTargetKey,
           progress: _cancelDragProgress,
-          onCancel: _cancelVoiceInteraction,
+          onCancel: _cancelVoiceInteractionWithFeedback,
         ),
       ),
       _VoiceState.transcribing => KeyedSubtree(
@@ -1230,7 +1272,7 @@ class _PromptInputState extends State<PromptInput> {
             leadingIcon: TablerRegular.x,
             hierarchy: PregoButtonsSolidHierarchy.secondary,
             size: PregoButtonsSolidSize.lg,
-            onPressed: _cancelVoiceInteraction,
+            onPressed: _cancelVoiceInteractionWithFeedback,
           ),
         ),
       ),
