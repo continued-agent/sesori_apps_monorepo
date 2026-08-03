@@ -3,7 +3,9 @@ import "package:sesori_plugin_interface/sesori_plugin_interface.dart";
 import "../api/codex_rollout_api.dart";
 import "../api/models/codex_rollout_dto.dart";
 import "../codex_config_reader.dart";
+import "codex_tool_lifecycle_tracker.dart";
 import "mappers/codex_rollout_tool_mapper.dart";
+import "models/codex_projected_tool.dart";
 
 /// Layer-2 mapping from typed rollout transcript DTOs to plugin messages.
 class CodexMessageRepository {
@@ -35,27 +37,12 @@ class CodexMessageRepository {
       );
     }
 
-    final toolOutputs = <String, CodexRolloutToolResult>{};
-    final submittedUserMessages = <String>{};
-    for (final line in lines) {
-      switch (line) {
-        case CodexRolloutResponseItemLineDto(payload: final payload):
-          final result = _rolloutToolMapper.mapResult(payload);
-          if (result != null) toolOutputs[result.callId] = result;
-        case CodexRolloutEventMessageLineDto(
-          payload: CodexRolloutUserMessageEventDto(:final message),
-        ):
-          submittedUserMessages.add(message);
-        case CodexRolloutEventMessageLineDto() ||
-            CodexRolloutSessionMetadataLineDto() ||
-            CodexRolloutTurnContextLineDto() ||
-            CodexRolloutCompactedLineDto() ||
-            CodexRolloutUnknownLineDto():
-          break;
-      }
-    }
-
-    final messages = <PluginMessageWithParts>[];
+    final toolTracker = CodexToolLifecycleTracker(
+      rolloutToolMapper: _rolloutToolMapper,
+    );
+    final messages = <PluginMessageWithParts?>[];
+    final toolMessageIndexById = <String, int>{};
+    final pendingUserMessages = <_PendingUserMessage>[];
     var messageCounter = 0;
     String? sessionProvider;
     String? currentModel;
@@ -72,9 +59,92 @@ class CodexMessageRepository {
       time: time,
     );
 
+    void upsertTool({
+      required CodexProjectedTool tool,
+      required String? timestamp,
+    }) {
+      final existingIndex = toolMessageIndexById[tool.canonicalId];
+      final info = existingIndex == null
+          ? assistantInfo(
+              id: tool.canonicalId,
+              time: _messageTimeFrom(timestamp),
+            )
+          : messages[existingIndex]!.info;
+      final message = _toolMessage(
+        messageId: tool.canonicalId,
+        sessionId: sessionId,
+        info: info,
+        tool: tool.tool,
+        title: tool.title,
+        status: tool.status,
+        output: tool.output,
+        attachments: tool.attachments,
+      );
+      if (existingIndex == null) {
+        toolMessageIndexById[tool.canonicalId] = messages.length;
+        messages.add(message);
+      } else {
+        messages[existingIndex] = message;
+      }
+    }
+
     for (final line in lines) {
+      final lineTimestamp = _lineTimestamp(line);
+      for (final tool in toolTracker.observeRolloutLine(threadId: sessionId, line: line)) {
+        upsertTool(tool: tool, timestamp: lineTimestamp);
+      }
+      if (line case CodexRolloutEventMessageLineDto(
+        payload: CodexRolloutUserMessageEventDto(message: final submittedMessage),
+      )) {
+        _PendingUserMessage? pending;
+        for (var index = pendingUserMessages.length - 1; index >= 0; index--) {
+          final candidate = pendingUserMessages[index];
+          if (!candidate.resolved) {
+            pending = candidate;
+            break;
+          }
+        }
+        if (pending == null) {
+          messageCounter += 1;
+          final messageId = _persistedOrLegacyMessageId(
+            persistedId: null,
+            legacyCounter: messageCounter,
+          );
+          messages.add(
+            _textMessage(
+              info: PluginMessage.user(
+                id: messageId,
+                sessionID: sessionId,
+                agent: null,
+                time: _messageTimeFrom(lineTimestamp),
+              ),
+              messageId: messageId,
+              sessionId: sessionId,
+              text: submittedMessage,
+            ),
+          );
+        } else {
+          final legacyCounter = pending.legacyCounter ?? (messageCounter += 1);
+          final messageId = _persistedOrLegacyMessageId(
+            persistedId: pending.persistedId,
+            legacyCounter: legacyCounter,
+          );
+          messages[pending.slot] = _textMessage(
+            info: PluginMessage.user(
+              id: messageId,
+              sessionID: sessionId,
+              agent: null,
+              time: pending.time,
+            ),
+            messageId: messageId,
+            sessionId: sessionId,
+            text: submittedMessage,
+          );
+          pending.resolved = true;
+        }
+      }
+
       final CodexRolloutResponseItemDto payload;
-      final String? lineTimestamp;
       switch (line) {
         case CodexRolloutSessionMetadataLineDto(payload: final metadata):
           sessionProvider ??= metadata.modelProvider;
@@ -106,10 +176,8 @@ class CodexMessageRepository {
           continue;
         case CodexRolloutResponseItemLineDto(
           payload: final responseItem,
-          timestamp: final timestamp,
         ):
           payload = responseItem;
-          lineTimestamp = timestamp;
         case CodexRolloutUnknownLineDto():
           continue;
       }
@@ -117,21 +185,7 @@ class CodexMessageRepository {
 
       switch (payload) {
         case CodexRolloutFunctionCallDto() || CodexRolloutCustomToolCallDto():
-          final call = _rolloutToolMapper.mapCall(payload);
-          if (call == null) continue;
-          final result = toolOutputs[call.id];
-          messages.add(
-            _toolMessage(
-              messageId: call.id,
-              sessionId: sessionId,
-              info: assistantInfo(id: call.id, time: messageTime),
-              tool: call.tool,
-              title: call.title,
-              status: result?.status ?? PluginToolStatus.running,
-              output: result?.output,
-              attachments: result?.attachments ?? const [],
-            ),
-          );
+          continue;
         case CodexRolloutFunctionCallOutputDto() || CodexRolloutCustomToolCallOutputDto():
           continue;
         case CodexRolloutWebSearchCallDto(:final id, :final action):
@@ -155,6 +209,7 @@ class CodexMessageRepository {
         case CodexRolloutImageGenerationDto():
           final generation = _rolloutToolMapper.mapImageGeneration(item: payload);
           messageCounter += 1;
+          if (generation.id != null) continue;
           final messageId = _persistedOrLegacyMessageId(
             persistedId: generation.id,
             legacyCounter: messageCounter,
@@ -210,11 +265,6 @@ class CodexMessageRepository {
           if (role != CodexRolloutRole.user && role != CodexRolloutRole.assistant) {
             continue;
           }
-          if (role == CodexRolloutRole.user &&
-              !submittedUserMessages.contains(_firstInputText(content: content)) &&
-              _isGeneratedUserContext(content: content)) {
-            continue;
-          }
           final texts = [
             for (final item in content)
               if (item case CodexRolloutInputTextDto(:final text) || CodexRolloutOutputTextDto(:final text)
@@ -222,6 +272,21 @@ class CodexMessageRepository {
                 text,
           ];
           if (texts.isEmpty) continue;
+          if (role == CodexRolloutRole.user) {
+            final fallbackText = _userVisibleText(content: content);
+            final legacyCounter = fallbackText == null ? null : (messageCounter += 1);
+            pendingUserMessages.add(
+              _PendingUserMessage(
+                slot: messages.length,
+                persistedId: id,
+                fallbackText: fallbackText,
+                legacyCounter: legacyCounter,
+                time: messageTime,
+              ),
+            );
+            messages.add(null);
+            continue;
+          }
 
           messageCounter += 1;
           final messageId = _persistedOrLegacyMessageId(
@@ -237,53 +302,95 @@ class CodexMessageRepository {
                 )
               : assistantInfo(id: messageId, time: messageTime);
           messages.add(
-            PluginMessageWithParts(
+            _textMessage(
               info: info,
-              parts: [
-                PluginMessagePart(
-                  id: "$messageId-text",
-                  sessionID: sessionId,
-                  messageID: messageId,
-                  type: PluginMessagePartType.text,
-                  text: texts.join(),
-                  tool: null,
-                  state: null,
-                  prompt: null,
-                  description: null,
-                  agent: null,
-                  agentName: null,
-                  attempt: null,
-                  retryError: null,
-                  attachment: null,
-                ),
-              ],
+              messageId: messageId,
+              sessionId: sessionId,
+              text: texts.join(),
             ),
           );
         case CodexRolloutUnknownResponseItemDto():
           continue;
       }
     }
-    return messages;
-  }
-
-  String? _firstInputText({required List<CodexRolloutContentDto> content}) {
-    for (final item in content) {
-      if (item case CodexRolloutInputTextDto(:final text)) return text;
+    for (final pending in pendingUserMessages) {
+      final fallbackText = pending.fallbackText;
+      final legacyCounter = pending.legacyCounter;
+      if (pending.resolved || fallbackText == null || legacyCounter == null) {
+        continue;
+      }
+      final messageId = _persistedOrLegacyMessageId(
+        persistedId: pending.persistedId,
+        legacyCounter: legacyCounter,
+      );
+      messages[pending.slot] = _textMessage(
+        info: PluginMessage.user(
+          id: messageId,
+          sessionID: sessionId,
+          agent: null,
+          time: pending.time,
+        ),
+        messageId: messageId,
+        sessionId: sessionId,
+        text: fallbackText,
+      );
     }
-    return null;
+    return [for (final message in messages) ?message];
   }
 
-  bool _isGeneratedUserContext({
+  String? _lineTimestamp(CodexRolloutLineDto line) {
+    return switch (line) {
+      CodexRolloutSessionMetadataLineDto(:final timestamp) ||
+      CodexRolloutTurnContextLineDto(:final timestamp) ||
+      CodexRolloutResponseItemLineDto(:final timestamp) ||
+      CodexRolloutEventMessageLineDto(:final timestamp) ||
+      CodexRolloutCompactedLineDto(:final timestamp) ||
+      CodexRolloutUnknownLineDto(:final timestamp) => timestamp,
+    };
+  }
+
+  String? _userVisibleText({
     required List<CodexRolloutContentDto> content,
   }) {
-    if (content.isEmpty || content.any((item) => item is! CodexRolloutInputTextDto)) {
-      return false;
-    }
     final texts = [
       for (final item in content)
-        if (item case CodexRolloutInputTextDto(:final text)) text.trim(),
+        if (item case CodexRolloutInputTextDto(:final text)
+            when text.isNotEmpty &&
+                !_GeneratedContextTag.values.any(
+                  (tag) => tag.wraps(text.trim()),
+                ))
+          text,
     ];
-    return texts.every((text) => _GeneratedContextTag.values.any((tag) => tag.wraps(text)));
+    return texts.isEmpty ? null : texts.join();
+  }
+
+  PluginMessageWithParts _textMessage({
+    required PluginMessage info,
+    required String messageId,
+    required String sessionId,
+    required String text,
+  }) {
+    return PluginMessageWithParts(
+      info: info,
+      parts: [
+        PluginMessagePart(
+          id: "$messageId-text",
+          sessionID: sessionId,
+          messageID: messageId,
+          type: PluginMessagePartType.text,
+          text: text,
+          tool: null,
+          state: null,
+          prompt: null,
+          description: null,
+          agent: null,
+          agentName: null,
+          attempt: null,
+          retryError: null,
+          attachment: null,
+        ),
+      ],
+    );
   }
 
   PluginMessageWithParts _toolMessage({
@@ -359,4 +466,21 @@ enum _GeneratedContextTag {
   final String wireName;
 
   bool wraps(String text) => text.startsWith("<$wireName>") && text.endsWith("</$wireName>");
+}
+
+class _PendingUserMessage {
+  _PendingUserMessage({
+    required this.slot,
+    required this.persistedId,
+    required this.fallbackText,
+    required this.legacyCounter,
+    required this.time,
+  });
+
+  final int slot;
+  final String? persistedId;
+  final String? fallbackText;
+  final int? legacyCounter;
+  final PluginMessageTime? time;
+  bool resolved = false;
 }

@@ -339,6 +339,7 @@ void main() {
             "type": "secret-token",
             "ghp_secretCredential": "secret-credential",
             "query": "secret-query",
+            "cell_id": "secret-cell-id",
           },
           "internal_chat_message_metadata_passthrough": {
             "turn_id": "secret-turn-id",
@@ -359,7 +360,8 @@ void main() {
         contains(
           'schema={type:enum("response_item"),payload:{'
           'type:enum("function_call"),name:String,call_id:int,arguments:{type:String,'
-          '<redacted-key>:String,query:String},internal_chat_message_metadata_passthrough:{turn_id:String},'
+          '<redacted-key>:String,query:String,cell_id:String},'
+          'internal_chat_message_metadata_passthrough:{turn_id:String},'
           "action:String}}",
         ),
       );
@@ -368,6 +370,7 @@ void main() {
       expect(output, isNot(contains("secret-token")));
       expect(output, isNot(contains("secret-credential")));
       expect(output, isNot(contains("secret-query")));
+      expect(output, isNot(contains("secret-cell-id")));
       expect(output, isNot(contains("secret-turn-id")));
       expect(output, isNot(contains("secret-source-content")));
     });
@@ -976,6 +979,32 @@ void main() {
             "type": "response_item",
             "payload": {
               "type": "message",
+              "id": "mixed-context-user",
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "<recommended_plugins>internal list</recommended_plugins>",
+                },
+                {"type": "input_text", "text": "Visible mixed prompt"},
+                {
+                  "type": "input_text",
+                  "text": "<environment_context>internal cwd</environment_context>",
+                },
+              ],
+            },
+          }),
+          jsonEncode({
+            "type": "event_msg",
+            "payload": {
+              "type": "user_message",
+              "message": "Visible mixed prompt",
+            },
+          }),
+          jsonEncode({
+            "type": "response_item",
+            "payload": {
+              "type": "message",
               "id": "generated-abort",
               "role": "user",
               "content": [
@@ -1008,6 +1037,7 @@ void main() {
       expect(messages.map((message) => message.info.id), [
         "actual-user",
         "actual-wrapper-user",
+        "mixed-context-user",
         "assistant-1",
       ]);
       expect(messages.first.parts.single.text, "Explain the <environment_context> tag");
@@ -1015,6 +1045,7 @@ void main() {
         messages[1].parts.single.text,
         "<environment_context>user-authored text</environment_context>",
       );
+      expect(messages[2].parts.single.text, "Visible mixed prompt");
       expect(messages.last.parts.single.text, "Visible answer");
     });
 
@@ -1210,6 +1241,238 @@ void main() {
       final patch = messages[2].parts.single;
       expect(patch.tool, equals("edit"));
       expect(patch.state?.status, equals(PluginToolStatus.running));
+    });
+
+    test("readMessages folds waits and closes calls from terminal evidence", () {
+      Map<String, Object?> call({
+        required String callId,
+        required String command,
+        required String? turnId,
+        required String name,
+      }) => {
+        "type": "response_item",
+        "payload": {
+          "type": "function_call",
+          "call_id": callId,
+          "name": name,
+          "arguments": name == "wait" ? command : jsonEncode({"cmd": command}),
+          if (turnId != null)
+            "internal_chat_message_metadata_passthrough": {
+              "turn_id": turnId,
+            },
+        },
+      };
+
+      Map<String, Object?> output({
+        required String callId,
+        required String text,
+      }) => {
+        "type": "response_item",
+        "payload": {
+          "type": "function_call_output",
+          "call_id": callId,
+          "output": text,
+        },
+      };
+
+      final path = _writeRollout(
+        codexHome,
+        path: "sessions/2026/08/03/rollout-tool-lifecycle.jsonl",
+        sessionId: "019a0000-1111-2222-3333-ccccccccccc2",
+        cwd: "/repo/app",
+        extraLines: [
+          jsonEncode(
+            call(
+              callId: "call-shell",
+              command: "sleep 30",
+              turnId: "turn-wait",
+              name: "exec_command",
+            ),
+          ),
+          jsonEncode(
+            output(
+              callId: "call-shell",
+              text: "Script running with cell ID 7\nOutput:\nearly output\n",
+            ),
+          ),
+          jsonEncode(
+            call(
+              callId: "call-wait",
+              command: '{"cell_id":"7"}',
+              turnId: "turn-wait",
+              name: "wait",
+            ),
+          ),
+          jsonEncode(
+            output(
+              callId: "call-wait",
+              text: "Script running with cell ID 8\nOutput:\nmiddle output\n",
+            ),
+          ),
+          jsonEncode(
+            call(
+              callId: "call-wait-final",
+              command: '{"cell_id":"8"}',
+              turnId: "turn-wait",
+              name: "wait",
+            ),
+          ),
+          jsonEncode(
+            output(
+              callId: "call-wait-final",
+              text: "aborted by user after 1.0s",
+            ),
+          ),
+          jsonEncode(
+            call(
+              callId: "call-completed",
+              command: "pwd",
+              turnId: "turn-completed",
+              name: "exec_command",
+            ),
+          ),
+          jsonEncode(
+            output(
+              callId: "call-completed",
+              text: "Script running with cell ID 9\nOutput:\n",
+            ),
+          ),
+          jsonEncode({
+            "type": "event_msg",
+            "payload": {
+              "type": "task_complete",
+              "turn_id": "turn-completed",
+            },
+          }),
+          jsonEncode(
+            call(
+              callId: "call-aborted",
+              command: "sleep 60",
+              turnId: "turn-aborted",
+              name: "exec_command",
+            ),
+          ),
+          jsonEncode(
+            output(
+              callId: "call-aborted",
+              text: "Script running with cell ID 10\nOutput:\n",
+            ),
+          ),
+          jsonEncode({
+            "type": "event_msg",
+            "payload": {
+              "type": "turn_aborted",
+              "turn_id": "turn-aborted",
+            },
+          }),
+          jsonEncode(
+            call(
+              callId: "call-legacy-completed",
+              command: "sleep 70",
+              turnId: null,
+              name: "exec_command",
+            ),
+          ),
+          jsonEncode(
+            output(
+              callId: "call-legacy-completed",
+              text: "Script running with cell ID 11\nOutput:\n",
+            ),
+          ),
+          jsonEncode({
+            "type": "event_msg",
+            "payload": {
+              "type": "task_complete",
+              "turn_id": "turn-legacy-completed",
+            },
+          }),
+          jsonEncode(
+            call(
+              callId: "call-legacy-aborted",
+              command: "sleep 80",
+              turnId: null,
+              name: "exec_command",
+            ),
+          ),
+          jsonEncode(
+            output(
+              callId: "call-legacy-aborted",
+              text: "Script running with cell ID 12\nOutput:\n",
+            ),
+          ),
+          jsonEncode({
+            "type": "event_msg",
+            "payload": {
+              "type": "turn_aborted",
+              "turn_id": "turn-legacy-aborted",
+            },
+          }),
+          jsonEncode(
+            call(
+              callId: "call-interrupted-legacy",
+              command: "sleep 90",
+              turnId: null,
+              name: "exec_command",
+            ),
+          ),
+          jsonEncode({
+            "type": "response_item",
+            "payload": {
+              "type": "message",
+              "id": "user-next",
+              "role": "user",
+              "content": [
+                {"type": "input_text", "text": "continue"},
+              ],
+            },
+          }),
+          jsonEncode({
+            "type": "event_msg",
+            "payload": {
+              "type": "user_message",
+              "message": "continue",
+            },
+          }),
+          jsonEncode(
+            call(
+              callId: "call-active",
+              command: "sleep 120",
+              turnId: null,
+              name: "exec_command",
+            ),
+          ),
+        ],
+      );
+
+      final messages = messageRepository.readMessages(
+        rolloutPath: path,
+        sessionId: "019a0000-1111-2222-3333-ccccccccccc2",
+      );
+
+      expect(messages.map((message) => message.info.id), [
+        "call-shell",
+        "call-completed",
+        "call-aborted",
+        "call-legacy-completed",
+        "call-legacy-aborted",
+        "call-interrupted-legacy",
+        "user-next",
+        "call-active",
+      ]);
+      final tools = {
+        for (final message in messages)
+          if (message.parts.single.type == PluginMessagePartType.tool) message.info.id: message.parts.single,
+      };
+      expect(tools["call-shell"]?.state?.status, PluginToolStatus.error);
+      expect(tools["call-shell"]?.state?.output, contains("early output"));
+      expect(tools["call-shell"]?.state?.output, contains("middle output"));
+      expect(tools["call-shell"]?.state?.output, contains("aborted by user after 1.0s"));
+      expect(tools["call-completed"]?.state?.status, PluginToolStatus.completed);
+      expect(tools["call-aborted"]?.state?.status, PluginToolStatus.error);
+      expect(tools["call-legacy-completed"]?.state?.status, PluginToolStatus.completed);
+      expect(tools["call-legacy-aborted"]?.state?.status, PluginToolStatus.error);
+      expect(tools["call-interrupted-legacy"]?.state?.status, PluginToolStatus.error);
+      expect(tools["call-active"]?.state?.status, PluginToolStatus.running);
     });
 
     test("readMessages restores current calls around malformed content items", () {

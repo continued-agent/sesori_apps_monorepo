@@ -3,13 +3,12 @@ import "package:sesori_plugin_interface/sesori_plugin_interface.dart";
 import "package:sesori_shared/sesori_shared.dart" as shared;
 
 import "api/models/codex_image_bearing_item_dto.dart";
-import "api/models/codex_rollout_dto.dart";
 import "api/parsers/codex_image_bearing_item_parser.dart";
 import "codex_app_server_client.dart";
 import "codex_config_reader.dart";
 import "repositories/mappers/codex_image_attachment_mapper.dart";
 import "repositories/mappers/codex_rollout_tool_mapper.dart";
-import "repositories/models/codex_command_projection.dart";
+import "repositories/models/codex_projected_tool.dart";
 import "repositories/models/codex_thread_record.dart";
 
 /// Translates `codex app-server` `ServerNotification` frames into
@@ -67,12 +66,6 @@ class CodexEventMapper {
   final CodexImageAttachmentMapper _imageAttachmentMapper;
   final CodexImageBearingItemParser _imageBearingItemParser;
   final CodexRolloutToolMapper _rolloutToolMapper;
-
-  /// Raw rollout state keyed by canonical `call_id`. Correlated app-server
-  /// command projections reuse this identity so late notifications preserve
-  /// the richer rollout result instead of replacing it with a smaller view.
-  final Map<String, CodexRolloutToolCall> _rolloutToolCalls = {};
-  final Map<String, CodexRolloutToolResult> _rolloutToolResults = {};
 
   /// Last-known thread times, used to turn activity notifications into a
   /// timestamp-bearing `session.updated` payload. Codex sends the activity
@@ -163,15 +156,7 @@ class CodexEventMapper {
   }
 
   /// Maps a non-thread-start notification to zero or more bridge events.
-  List<BridgeSseEvent> map(CodexServerNotification notification) => mapCommand(
-    notification: notification,
-    commandProjection: const CodexAppServerCommandNative(),
-  );
-
-  List<BridgeSseEvent> mapCommand({
-    required CodexServerNotification notification,
-    required CodexAppServerCommandProjection commandProjection,
-  }) {
+  List<BridgeSseEvent> map(CodexServerNotification notification) {
     final method = notification.method;
     final params = notification.params;
 
@@ -234,7 +219,6 @@ class CodexEventMapper {
           item: item,
           threadId: threadId,
           completed: method == "item/completed",
-          commandProjection: commandProjection,
         );
 
       case "item/agentMessage/delta":
@@ -271,72 +255,19 @@ class CodexEventMapper {
     return const [];
   }
 
-  /// Maps a complete response-item record observed in the active rollout.
-  ///
-  /// App-server's stable item stream remains the low-latency source. These
-  /// records update the same message ids with executor metadata and also
-  /// surface raw-only calls such as code-mode `exec` and `wait`.
-  List<BridgeSseEvent> mapRolloutLine({
+  /// Renders a complete repository-owned canonical tool upsert.
+  List<BridgeSseEvent> mapProjectedTool({
     required String threadId,
-    required CodexRolloutLineDto line,
-  }) {
-    final payload = switch (line) {
-      CodexRolloutResponseItemLineDto(payload: final payload) => payload,
-      CodexRolloutSessionMetadataLineDto() ||
-      CodexRolloutTurnContextLineDto() ||
-      CodexRolloutEventMessageLineDto() ||
-      CodexRolloutCompactedLineDto() ||
-      CodexRolloutUnknownLineDto() => null,
-    };
-    if (payload == null) return const [];
-    if (payload case final CodexRolloutImageGenerationDto item) {
-      final generation = _rolloutToolMapper.mapImageGeneration(item: item);
-      final itemId = generation.id;
-      // Id-less history remains replayable through the repository's
-      // deterministic fallback, but cannot safely enrich a live item.
-      if (itemId == null) return const [];
-      return _toolItemEvents(
-        threadId: threadId,
-        itemId: itemId,
-        tool: "image_generation",
-        status: generation.status,
-        attachments: generation.attachments,
-      );
-    }
-    final call = _rolloutToolMapper.mapCall(payload);
-    if (call != null) {
-      _rolloutToolCalls[_rolloutToolKey(threadId, call.id)] = call;
-      return _toolItemEvents(
-        threadId: threadId,
-        itemId: call.id,
-        tool: call.tool,
-        title: call.title,
-        status: PluginToolStatus.running,
-        attachments: const [],
-      );
-    }
-    final result = _rolloutToolMapper.mapResult(payload);
-    if (result == null) return const [];
-    final key = _rolloutToolKey(threadId, result.callId);
-    final originalCall = _rolloutToolCalls[key];
-    if (originalCall == null) return const [];
-    _rolloutToolResults[key] = result;
-    return _toolItemEvents(
-      threadId: threadId,
-      itemId: originalCall.id,
-      tool: originalCall.tool,
-      title: originalCall.title,
-      status: result.status,
-      output: result.output,
-      attachments: result.attachments,
-    );
-  }
-
-  void clearRolloutTurn({required String threadId}) {
-    final prefix = "$threadId\u0000";
-    _rolloutToolCalls.removeWhere((key, _) => key.startsWith(prefix));
-    _rolloutToolResults.removeWhere((key, _) => key.startsWith(prefix));
-  }
+    required CodexProjectedTool tool,
+  }) => _toolItemEvents(
+    threadId: threadId,
+    itemId: tool.canonicalId,
+    tool: tool.tool,
+    title: tool.title,
+    status: tool.status,
+    output: tool.output,
+    attachments: tool.attachments,
+  );
 
   /// `item/*/delta` notifications stream text into an already-known part.
   List<BridgeSseEvent> _deltaEvent({
@@ -366,7 +297,6 @@ class CodexEventMapper {
     required Map<String, dynamic> item,
     required String threadId,
     required bool completed,
-    required CodexAppServerCommandProjection commandProjection,
   }) {
     final itemId = item["id"] as String?;
     if (itemId == null || itemId.isEmpty) return const [];
@@ -406,10 +336,6 @@ class CodexEventMapper {
         :final content,
         :final error,
       ):
-        final canonical = _canonicalRolloutTool(
-          threadId: threadId,
-          itemId: itemId,
-        );
         return _toolItemEvents(
           threadId: threadId,
           itemId: itemId,
@@ -418,8 +344,7 @@ class CodexEventMapper {
           status: _parsedToolStatus(status: status, completed: completed),
           output: _imageBearingToolOutput(content: content),
           error: error,
-          attachments: _rolloutAttachmentsOrMap(
-            result: canonical?.result,
+          attachments: _imageAttachmentMapper.map(
             candidates: [
               for (final item in content)
                 if (item case CodexMcpImageContentDto(:final data, :final mimeType))
@@ -437,28 +362,19 @@ class CodexEventMapper {
         :final status,
         :final content,
       ):
-        final canonical = _canonicalRolloutTool(
-          threadId: threadId,
-          itemId: itemId,
-        );
         return _toolItemEvents(
           threadId: threadId,
           itemId: itemId,
-          tool: canonical?.call.tool ?? tool,
-          title: canonical?.call.title ?? _dynamicToolTitle(arguments),
-          status:
-              canonical?.result.status ??
-              _parsedToolStatus(
-                status: status,
-                completed: completed,
-              ),
-          output:
-              canonical?.result.output ??
-              _rolloutToolMapper.clipOutput(
-                _imageBearingToolOutput(content: content),
-              ),
-          attachments: _rolloutAttachmentsOrMap(
-            result: canonical?.result,
+          tool: tool,
+          title: _dynamicToolTitle(arguments),
+          status: _parsedToolStatus(
+            status: status,
+            completed: completed,
+          ),
+          output: _rolloutToolMapper.clipOutput(
+            _imageBearingToolOutput(content: content),
+          ),
+          attachments: _imageAttachmentMapper.map(
             candidates: [
               for (final item in content)
                 if (item case CodexDynamicImageContentDto(:final imageUrl))
@@ -508,36 +424,22 @@ class CodexEventMapper {
           text: _extractReasoningText(item),
         );
       case "commandExecution":
-        final canonicalItemId = switch (commandProjection) {
-          CodexAppServerCommandNative() => itemId,
-          CodexAppServerCommandCanonical(:final callId) => callId,
-        };
-        final canonical = _canonicalRolloutTool(
-          threadId: threadId,
-          itemId: canonicalItemId,
-        );
         final exitCode = item["exitCode"];
         final appServerStatus = exitCode is num && exitCode.toInt() != 0
             ? PluginToolStatus.error
             : _toolStatus(item["status"], completed: completed);
         return _toolItemEvents(
           threadId: threadId,
-          itemId: canonicalItemId,
-          tool: canonical?.call.tool ?? "shell",
-          title:
-              canonical?.call.title ??
-              _rolloutToolMapper.logicalCommandTitle(
-                item["command"] as String?,
-              ),
-          status: appServerStatus == PluginToolStatus.error
-              ? PluginToolStatus.error
-              : canonical?.result.status ?? appServerStatus,
-          output:
-              canonical?.result.output ??
-              _rolloutToolMapper.clipOutput(
-                item["aggregatedOutput"] as String?,
-              ),
-          attachments: canonical?.result.attachments ?? const [],
+          itemId: itemId,
+          tool: "shell",
+          title: _rolloutToolMapper.logicalCommandTitle(
+            item["command"] as String?,
+          ),
+          status: appServerStatus,
+          output: _rolloutToolMapper.clipOutput(
+            item["aggregatedOutput"] as String?,
+          ),
+          attachments: const [],
         );
       case "fileChange":
         return _toolItemEvents(
@@ -665,29 +567,6 @@ class CodexEventMapper {
       CodexImageGenerationStatus.unknown => completed ? PluginToolStatus.completed : PluginToolStatus.running,
     };
   }
-
-  ({CodexRolloutToolCall call, CodexRolloutToolResult result})? _canonicalRolloutTool({
-    required String threadId,
-    required String itemId,
-  }) {
-    final key = _rolloutToolKey(threadId, itemId);
-    final call = _rolloutToolCalls[key];
-    final result = _rolloutToolResults[key];
-    return call == null || result == null ? null : (call: call, result: result);
-  }
-
-  List<PluginMessageAttachment> _rolloutAttachmentsOrMap({
-    required CodexRolloutToolResult? result,
-    required Iterable<CodexImageAttachmentCandidate> candidates,
-  }) {
-    final rolloutAttachments = result?.attachments;
-    if (rolloutAttachments != null && rolloutAttachments.isNotEmpty) {
-      return rolloutAttachments;
-    }
-    return _imageAttachmentMapper.map(candidates: candidates);
-  }
-
-  String _rolloutToolKey(String threadId, String callId) => "$threadId\u0000$callId";
 
   /// A short title for a `fileChange` item: the touched paths (codex's
   /// `changes` are `{path, kind, diff}` entries).
