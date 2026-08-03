@@ -165,6 +165,18 @@ class CodexRolloutToolMapper {
     attachments: attachments,
   );
 
+  List<PluginMessageAttachment> mapContentAttachments({
+    required Iterable<CodexRolloutContentDto> content,
+  }) {
+    return _imageAttachmentMapper.map(
+      candidates: [
+        for (final item in content)
+          if (item case CodexRolloutInputImageDto(:final imageUrl))
+            CodexImageAttachmentCandidate.imageUrl(imageUrl: imageUrl),
+      ],
+    );
+  }
+
   CodexRolloutToolCall? mapCall(CodexRolloutResponseItemDto payload) {
     if (isInternalToolCall(payload: payload)) return null;
     return switch (payload) {
@@ -295,12 +307,8 @@ class CodexRolloutToolMapper {
     final callId = _usefulText(output.callId);
     if (callId == null) return null;
     final rawOutput = toolOutputText(output.content);
-    final attachments = _imageAttachmentMapper.map(
-      candidates: [
-        for (final item in output.content)
-          if (item case CodexRolloutInputImageDto(:final imageUrl))
-            CodexImageAttachmentCandidate.imageUrl(imageUrl: imageUrl),
-      ],
+    final attachments = mapContentAttachments(
+      content: output.content,
     );
     final cellIds = _runningCellIds(content: output.content);
     final failed = _toolOutputFailed(content: output.content);

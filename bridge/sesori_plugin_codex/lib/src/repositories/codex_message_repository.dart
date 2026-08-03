@@ -96,6 +96,7 @@ class CodexMessageRepository {
       if (line case CodexRolloutEventMessageLineDto(
         payload: CodexRolloutUserMessageEventDto(message: final submittedMessage),
       )) {
+        final submittedText = submittedMessage.isEmpty ? null : submittedMessage;
         _PendingUserMessage? pending;
         for (var index = pendingUserMessages.length - 1; index >= 0; index--) {
           final candidate = pendingUserMessages[index];
@@ -105,6 +106,7 @@ class CodexMessageRepository {
           }
         }
         if (pending == null) {
+          if (submittedText == null) continue;
           messageCounter += 1;
           final messageId = _persistedOrLegacyMessageId(
             persistedId: null,
@@ -120,7 +122,8 @@ class CodexMessageRepository {
               ),
               messageId: messageId,
               sessionId: sessionId,
-              text: submittedMessage,
+              text: submittedText,
+              attachments: const [],
             ),
           );
         } else {
@@ -138,7 +141,8 @@ class CodexMessageRepository {
             ),
             messageId: messageId,
             sessionId: sessionId,
-            text: submittedMessage,
+            text: submittedText,
+            attachments: pending.attachments,
           );
           pending.resolved = true;
         }
@@ -271,15 +275,19 @@ class CodexMessageRepository {
                   when text.isNotEmpty)
                 text,
           ];
-          if (texts.isEmpty) continue;
+          final attachments = role == CodexRolloutRole.user
+              ? _rolloutToolMapper.mapContentAttachments(content: content)
+              : const <PluginMessageAttachment>[];
+          if (texts.isEmpty && attachments.isEmpty) continue;
           if (role == CodexRolloutRole.user) {
             final fallbackText = _userVisibleText(content: content);
-            final legacyCounter = fallbackText == null ? null : (messageCounter += 1);
+            final legacyCounter = fallbackText == null && attachments.isEmpty ? null : (messageCounter += 1);
             pendingUserMessages.add(
               _PendingUserMessage(
                 slot: messages.length,
                 persistedId: id,
                 fallbackText: fallbackText,
+                attachments: attachments,
                 legacyCounter: legacyCounter,
                 time: messageTime,
               ),
@@ -307,6 +315,7 @@ class CodexMessageRepository {
               messageId: messageId,
               sessionId: sessionId,
               text: texts.join(),
+              attachments: const [],
             ),
           );
         case CodexRolloutUnknownResponseItemDto():
@@ -316,7 +325,7 @@ class CodexMessageRepository {
     for (final pending in pendingUserMessages) {
       final fallbackText = pending.fallbackText;
       final legacyCounter = pending.legacyCounter;
-      if (pending.resolved || fallbackText == null || legacyCounter == null) {
+      if (pending.resolved || legacyCounter == null || (fallbackText == null && pending.attachments.isEmpty)) {
         continue;
       }
       final messageId = _persistedOrLegacyMessageId(
@@ -333,6 +342,7 @@ class CodexMessageRepository {
         messageId: messageId,
         sessionId: sessionId,
         text: fallbackText,
+        attachments: pending.attachments,
       );
     }
     return [for (final message in messages) ?message];
@@ -368,27 +378,46 @@ class CodexMessageRepository {
     required PluginMessage info,
     required String messageId,
     required String sessionId,
-    required String text,
+    required String? text,
+    required List<PluginMessageAttachment> attachments,
   }) {
     return PluginMessageWithParts(
       info: info,
       parts: [
-        PluginMessagePart(
-          id: "$messageId-text",
-          sessionID: sessionId,
-          messageID: messageId,
-          type: PluginMessagePartType.text,
-          text: text,
-          tool: null,
-          state: null,
-          prompt: null,
-          description: null,
-          agent: null,
-          agentName: null,
-          attempt: null,
-          retryError: null,
-          attachment: null,
-        ),
+        if (text != null)
+          PluginMessagePart(
+            id: "$messageId-text",
+            sessionID: sessionId,
+            messageID: messageId,
+            type: PluginMessagePartType.text,
+            text: text,
+            tool: null,
+            state: null,
+            prompt: null,
+            description: null,
+            agent: null,
+            agentName: null,
+            attempt: null,
+            retryError: null,
+            attachment: null,
+          ),
+        for (var index = 0; index < attachments.length; index++)
+          PluginMessagePart(
+            id: "$messageId-file-${index + 1}",
+            sessionID: sessionId,
+            messageID: messageId,
+            type: PluginMessagePartType.file,
+            text: null,
+            tool: null,
+            state: null,
+            prompt: null,
+            description: null,
+            agent: null,
+            agentName: null,
+            attempt: null,
+            retryError: null,
+            attachment: attachments[index],
+          ),
       ],
     );
   }
@@ -473,6 +502,7 @@ class _PendingUserMessage {
     required this.slot,
     required this.persistedId,
     required this.fallbackText,
+    required this.attachments,
     required this.legacyCounter,
     required this.time,
   });
@@ -480,6 +510,7 @@ class _PendingUserMessage {
   final int slot;
   final String? persistedId;
   final String? fallbackText;
+  final List<PluginMessageAttachment> attachments;
   final int? legacyCounter;
   final PluginMessageTime? time;
   bool resolved = false;
