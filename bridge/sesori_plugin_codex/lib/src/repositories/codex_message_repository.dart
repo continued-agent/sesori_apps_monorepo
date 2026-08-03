@@ -21,6 +21,7 @@ class CodexMessageRepository {
   List<PluginMessageWithParts> readMessages({
     required String rolloutPath,
     required String sessionId,
+    required Map<String, PluginToolStatus> structuredToolStatusByCallId,
     CodexConfigDefaults config = const CodexConfigDefaults.empty(),
   }) {
     final List<CodexRolloutLineDto> lines;
@@ -76,7 +77,7 @@ class CodexMessageRepository {
         info: info,
         tool: tool.tool,
         title: tool.title,
-        status: tool.status,
+        status: structuredToolStatusByCallId[tool.canonicalId] ?? tool.status,
         output: tool.output,
         attachments: tool.attachments,
       );

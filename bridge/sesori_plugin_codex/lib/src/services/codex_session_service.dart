@@ -9,6 +9,7 @@ import "../repositories/codex_message_repository.dart";
 import "../repositories/codex_model_repository.dart";
 import "../repositories/codex_skill_repository.dart";
 import "../repositories/codex_thread_repository.dart";
+import "../repositories/codex_tool_outcome_repository.dart";
 import "../repositories/models/codex_thread_record.dart";
 
 /// Layer-3 coordination for the migrated Codex session operations.
@@ -26,15 +27,18 @@ class CodexSessionService {
     required CodexCatalogRepository catalogRepository,
     required CodexMessageRepository messageRepository,
     required CodexMetadataRepository metadataRepository,
+    required CodexToolOutcomeRepository toolOutcomeRepository,
     required String launchDirectory,
   }) : _catalogRepository = catalogRepository,
        _messageRepository = messageRepository,
        _metadataRepository = metadataRepository,
+       _toolOutcomeRepository = toolOutcomeRepository,
        _launchDirectory = launchDirectory;
 
   final CodexCatalogRepository _catalogRepository;
   final CodexMessageRepository _messageRepository;
   final CodexMetadataRepository _metadataRepository;
+  final CodexToolOutcomeRepository _toolOutcomeRepository;
   final String _launchDirectory;
 
   CodexThreadRepository? _threadRepository;
@@ -361,8 +365,19 @@ class CodexSessionService {
     );
   }
 
-  void deleteSession({required String sessionId}) {
-    _catalogRepository.deleteSession(sessionId: sessionId);
+  Future<void> deleteSession({required String sessionId}) async {
+    final deleted = _catalogRepository.deleteSession(sessionId: sessionId);
+    if (deleted) {
+      try {
+        await _toolOutcomeRepository.deleteSession(sessionId: sessionId);
+      } on Object catch (error, stackTrace) {
+        Log.w(
+          "[codex] failed to delete persisted tool outcomes for $sessionId",
+          error,
+          stackTrace,
+        );
+      }
+    }
     _loadedThreads.remove(sessionId);
     _threadModels.remove(sessionId);
   }
@@ -372,9 +387,23 @@ class CodexSessionService {
   }) async {
     final path = _catalogRepository.findRolloutPath(sessionId: sessionId);
     if (path == null) return const [];
+    Map<String, PluginToolStatus> structuredToolStatusByCallId;
+    try {
+      structuredToolStatusByCallId = await _toolOutcomeRepository.readStatuses(
+        sessionId: sessionId,
+      );
+    } on Object catch (error, stackTrace) {
+      Log.w(
+        "[codex] failed to read persisted tool outcomes for $sessionId",
+        error,
+        stackTrace,
+      );
+      structuredToolStatusByCallId = const {};
+    }
     return _messageRepository.readMessages(
       rolloutPath: path,
       sessionId: sessionId,
+      structuredToolStatusByCallId: structuredToolStatusByCallId,
       config: _metadataRepository.readConfigDefaults(),
     );
   }

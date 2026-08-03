@@ -185,11 +185,36 @@ void main() {
       final rolloutApi = _DeleteFailingRolloutApi();
       final repository = CodexCatalogRepository(rolloutApi: rolloutApi);
 
-      repository.deleteSession(
+      final deleted = repository.deleteSession(
         sessionId: "019a0000-1111-2222-3333-aaaaaaaaaaaa",
       );
 
+      expect(deleted, isFalse);
       expect(rolloutApi.wroteIndex, isFalse);
+    });
+
+    test("reports failure when rollout absence cannot be confirmed", () {
+      final repository = CodexCatalogRepository(
+        rolloutApi: _EnumerationFailingRolloutApi(),
+      );
+
+      expect(repository.deleteSession(sessionId: "session-1"), isFalse);
+    });
+
+    test("reports failure when the session index cannot be read", () {
+      final repository = CodexCatalogRepository(
+        rolloutApi: _IndexReadFailingRolloutApi(),
+      );
+
+      expect(repository.deleteSession(sessionId: "session-1"), isFalse);
+    });
+
+    test("reports failure when the session index cannot be updated", () {
+      final repository = CodexCatalogRepository(
+        rolloutApi: _IndexWriteFailingRolloutApi(),
+      );
+
+      expect(repository.deleteSession(sessionId: "session-1"), isFalse);
     });
   });
 }
@@ -287,5 +312,50 @@ class _DeleteFailingRolloutApi extends CodexRolloutApi {
   @override
   void writeSessionIndex({required List<String> lines}) {
     wroteIndex = true;
+  }
+}
+
+class _EnumerationFailingRolloutApi extends CodexRolloutApi {
+  _EnumerationFailingRolloutApi() : super(environment: const {});
+
+  @override
+  List<String> listRolloutPaths() {
+    throw const FileSystemException("denied");
+  }
+}
+
+class _IndexReadFailingRolloutApi extends CodexRolloutApi {
+  _IndexReadFailingRolloutApi() : super(environment: const {});
+
+  @override
+  List<String> listRolloutPaths() => const [];
+
+  @override
+  List<CodexSessionIndexLine> readSessionIndexLines() {
+    throw const FileSystemException("denied");
+  }
+}
+
+class _IndexWriteFailingRolloutApi extends CodexRolloutApi {
+  _IndexWriteFailingRolloutApi() : super(environment: const {});
+
+  @override
+  List<String> listRolloutPaths() => const [];
+
+  @override
+  List<CodexSessionIndexLine> readSessionIndexLines() => [
+    (
+      entry: const CodexSessionIndexEntryDto(
+        id: "session-1",
+        threadName: "Session",
+        updatedAt: null,
+      ),
+      raw: '{"id":"session-1"}',
+    ),
+  ];
+
+  @override
+  void writeSessionIndex({required List<String> lines}) {
+    throw const FileSystemException("denied");
   }
 }
