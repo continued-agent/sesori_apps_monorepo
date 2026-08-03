@@ -56,6 +56,7 @@ CodexManagedApi _defaultBuildApi({
   const rolloutToolMapper = CodexRolloutToolMapper(
     imageAttachmentMapper: imageAttachmentMapper,
   );
+  const imageBearingItemParser = CodexImageBearingItemParser();
   final catalogRepository = CodexCatalogRepository(rolloutApi: rolloutApi);
   final toolOutcomeRepository = CodexToolOutcomeRepository(
     storage: CodexToolOutcomeStorage(
@@ -83,7 +84,7 @@ CodexManagedApi _defaultBuildApi({
       pluginId: CodexPlugin.pluginId,
       projectCwd: launchDirectory,
       imageAttachmentMapper: imageAttachmentMapper,
-      imageBearingItemParser: const CodexImageBearingItemParser(),
+      imageBearingItemParser: imageBearingItemParser,
       rolloutToolMapper: rolloutToolMapper,
       config: configReader.readDefaults(),
     ),
@@ -97,6 +98,7 @@ CodexManagedApi _defaultBuildApi({
     ),
     toolOutcomeRepository: toolOutcomeRepository,
     commandExecutionParser: const CodexCommandExecutionParser(),
+    imageBearingItemParser: imageBearingItemParser,
     projectCwd: launchDirectory,
     onConnected: onConnected,
     onDisconnected: onDisconnected,

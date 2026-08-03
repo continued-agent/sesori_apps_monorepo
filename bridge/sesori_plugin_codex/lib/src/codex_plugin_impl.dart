@@ -5,7 +5,9 @@ import "package:sesori_plugin_interface/sesori_plugin_interface.dart";
 import "package:sesori_shared/sesori_shared.dart" show Harness;
 
 import "api/codex_app_server_api.dart";
+import "api/models/codex_image_bearing_item_dto.dart";
 import "api/parsers/codex_command_execution_parser.dart";
+import "api/parsers/codex_image_bearing_item_parser.dart";
 import "approval_registry.dart";
 import "codex_app_server_client.dart";
 import "codex_event_mapper.dart";
@@ -58,6 +60,7 @@ class CodexPlugin implements CodexManagedApi {
   final CodexToolLifecycleTracker _toolLifecycleTracker;
   final CodexToolOutcomeRepository _toolOutcomeRepository;
   final CodexCommandExecutionParser _commandExecutionParser;
+  final CodexImageBearingItemParser _imageBearingItemParser;
   final String _projectCwd;
   final Duration _keepaliveInterval;
 
@@ -124,6 +127,7 @@ class CodexPlugin implements CodexManagedApi {
     required CodexToolLifecycleTracker toolLifecycleTracker,
     required CodexToolOutcomeRepository toolOutcomeRepository,
     required CodexCommandExecutionParser commandExecutionParser,
+    required CodexImageBearingItemParser imageBearingItemParser,
     required String projectCwd,
     required void Function()? onConnected,
     required void Function()? onDisconnected,
@@ -138,6 +142,7 @@ class CodexPlugin implements CodexManagedApi {
          toolLifecycleTracker: toolLifecycleTracker,
          toolOutcomeRepository: toolOutcomeRepository,
          commandExecutionParser: commandExecutionParser,
+         imageBearingItemParser: imageBearingItemParser,
          projectCwd: projectCwd,
          onConnected: onConnected,
          onDisconnected: onDisconnected,
@@ -154,6 +159,7 @@ class CodexPlugin implements CodexManagedApi {
     required CodexToolLifecycleTracker toolLifecycleTracker,
     required CodexToolOutcomeRepository toolOutcomeRepository,
     required CodexCommandExecutionParser commandExecutionParser,
+    required CodexImageBearingItemParser imageBearingItemParser,
     required String projectCwd,
     required void Function()? onConnected,
     required void Function()? onDisconnected,
@@ -168,6 +174,7 @@ class CodexPlugin implements CodexManagedApi {
        _toolLifecycleTracker = toolLifecycleTracker,
        _toolOutcomeRepository = toolOutcomeRepository,
        _commandExecutionParser = commandExecutionParser,
+       _imageBearingItemParser = imageBearingItemParser,
        _projectCwd = projectCwd,
        _onConnected = onConnected,
        _onDisconnected = onDisconnected,
@@ -344,6 +351,7 @@ class CodexPlugin implements CodexManagedApi {
     );
     final projectedTool = _toolLifecycleTracker.observeAppServerTool(
       notification: notification,
+      imageGeneration: _parseImageGeneration(notification: notification),
     );
     if (command != null && projectedTool != null && !_deletedThreadIds.contains(command.threadId)) {
       try {
@@ -375,6 +383,22 @@ class CodexPlugin implements CodexManagedApi {
     if (activityChanged) {
       _eventBuffer.add(const BridgeSseProjectUpdated());
     }
+  }
+
+  CodexImageGenerationItemDto? _parseImageGeneration({
+    required CodexServerNotification notification,
+  }) {
+    if (notification.method != "item/started" && notification.method != "item/completed") {
+      return null;
+    }
+    final item = notification.params["item"];
+    if (item is! Map || item["type"] != "imageGeneration") {
+      return null;
+    }
+    final parsed = _imageBearingItemParser.parse(
+      item: Map<String, dynamic>.from(item),
+    );
+    return parsed is CodexImageGenerationItemDto ? parsed : null;
   }
 
   void _handleRolloutAppend(CodexRolloutAppend append) {

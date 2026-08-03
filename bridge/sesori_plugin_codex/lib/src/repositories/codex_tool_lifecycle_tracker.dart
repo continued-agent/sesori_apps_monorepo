@@ -1,5 +1,6 @@
 import "package:sesori_plugin_interface/sesori_plugin_interface.dart";
 
+import "../api/models/codex_image_bearing_item_dto.dart";
 import "../api/models/codex_rollout_dto.dart";
 import "../codex_app_server_client.dart";
 import "mappers/codex_rollout_tool_mapper.dart";
@@ -46,6 +47,7 @@ class CodexToolLifecycleTracker {
   /// and continue through the existing native event mapping.
   CodexProjectedTool? observeAppServerTool({
     required CodexServerNotification notification,
+    required CodexImageGenerationItemDto? imageGeneration,
   }) {
     if (notification.method != "item/started" && notification.method != "item/completed") {
       return null;
@@ -56,6 +58,41 @@ class CodexToolLifecycleTracker {
     final itemId = _usefulText(value: item["id"]);
     final threadId = _usefulText(value: params["threadId"]);
     if (itemId == null || threadId == null) return null;
+    if (imageGeneration != null) {
+      final thread = _threads.putIfAbsent(
+        threadId,
+        _ThreadToolLifecycle.new,
+      );
+      final generation = _rolloutToolMapper.mapAppServerImageGeneration(
+        item: imageGeneration,
+        completed: notification.method == "item/completed",
+      );
+      final generationId = generation.id;
+      if (generationId == null) return null;
+      final tool = thread.tools.putIfAbsent(
+        generationId,
+        () => _TrackedTool(
+          id: generationId,
+          tool: "image_generation",
+          title: null,
+          turnId: null,
+          chronologySegment: thread.chronologySegment,
+          isRolloutCall: false,
+        ),
+      );
+      tool.status = _mergeStatus(
+        previous: tool.status,
+        current: generation.status,
+      );
+      if (tool.attachments.isEmpty) {
+        _mergeAttachments(
+          accumulated: tool.attachments,
+          current: generation.attachments,
+        );
+      }
+      return tool.snapshot();
+    }
+
     final thread = _threads[threadId];
     if (thread == null) return null;
 
@@ -106,6 +143,28 @@ class CodexToolLifecycleTracker {
           );
     tool.status = _mergeStatus(previous: tool.status, current: status);
     return tool.snapshot();
+  }
+
+  void prepareRolloutReplay({
+    required String threadId,
+    required Iterable<CodexRolloutLineDto> lines,
+  }) {
+    final thread = _threads.putIfAbsent(threadId, _ThreadToolLifecycle.new);
+    thread.durableImageResults.addAll([
+      for (final line in lines)
+        if (line case CodexRolloutEventMessageLineDto(
+          payload: CodexRolloutImageGenerationEndEventDto(:final result),
+        ) when result.isNotEmpty)
+          result,
+    ]);
+  }
+
+  bool shouldReplayLegacyImage({
+    required String threadId,
+    required CodexRolloutImageGenerationDto image,
+  }) {
+    final id = image.id?.trim();
+    return (id != null && id.isNotEmpty) || !(_threads[threadId]?.durableImageResults.contains(image.result) ?? false);
   }
 
   void clearThread({required String threadId}) {
@@ -262,8 +321,42 @@ class CodexToolLifecycleTracker {
         turnId: turnId,
         status: PluginToolStatus.error,
       ),
+      CodexRolloutImageGenerationEndEventDto() => _observeImageGenerationEnd(
+        thread: thread,
+        event: event,
+      ),
       CodexRolloutUnknownEventDto() => const [],
     };
+  }
+
+  List<CodexProjectedTool> _observeImageGenerationEnd({
+    required _ThreadToolLifecycle thread,
+    required CodexRolloutImageGenerationEndEventDto event,
+  }) {
+    final generation = _rolloutToolMapper.mapImageGenerationEnd(event: event);
+    final id = generation.id;
+    if (id == null) return const [];
+    final tool = thread.tools.putIfAbsent(
+      id,
+      () => _TrackedTool(
+        id: id,
+        tool: "image_generation",
+        title: null,
+        turnId: null,
+        chronologySegment: thread.chronologySegment,
+        isRolloutCall: false,
+      ),
+    );
+    tool.status = _mergeStatus(
+      previous: tool.status,
+      current: generation.status,
+    );
+    tool.attachments.clear();
+    _mergeAttachments(
+      accumulated: tool.attachments,
+      current: generation.attachments,
+    );
+    return [tool.snapshot()];
   }
 
   List<CodexProjectedTool> _startTurn({
@@ -410,6 +503,7 @@ class _ThreadToolLifecycle {
   final Map<String, String> waitCellByCall = {};
   final Set<String> internalCalls = {};
   final Map<String, String> appServerItemAliases = {};
+  final Set<String> durableImageResults = {};
 
   String? activeTurnId;
   int chronologySegment = 0;

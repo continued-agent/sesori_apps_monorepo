@@ -3,6 +3,7 @@ import "dart:convert";
 import "package:sesori_plugin_interface/sesori_plugin_interface.dart";
 import "package:sesori_shared/sesori_shared.dart" show jsonDecodeMap;
 
+import "../../api/models/codex_image_bearing_item_dto.dart";
 import "../../api/models/codex_rollout_dto.dart";
 import "codex_image_attachment_mapper.dart";
 
@@ -159,6 +160,59 @@ class CodexRolloutToolMapper {
     );
   }
 
+  CodexRolloutImageGeneration mapImageGenerationEnd({
+    required CodexRolloutImageGenerationEndEventDto event,
+  }) {
+    final status = switch (event.status) {
+      CodexRolloutImageGenerationStatus.inProgress => PluginToolStatus.running,
+      CodexRolloutImageGenerationStatus.completed => PluginToolStatus.completed,
+      CodexRolloutImageGenerationStatus.failed => PluginToolStatus.error,
+      CodexRolloutImageGenerationStatus.unknown => PluginToolStatus.completed,
+    };
+    return CodexRolloutImageGeneration(
+      id: _usefulText(event.callId),
+      status: status,
+      attachments: status == PluginToolStatus.completed
+          ? _imageAttachmentMapper.map(
+              candidates: [
+                CodexImageAttachmentCandidate.base64(
+                  data: event.result,
+                  mime: "image/png",
+                  filenameHint: event.savedPath,
+                ),
+              ],
+            )
+          : const [],
+    );
+  }
+
+  CodexRolloutImageGeneration mapAppServerImageGeneration({
+    required CodexImageGenerationItemDto item,
+    required bool completed,
+  }) {
+    final status = switch (item.status) {
+      CodexImageGenerationStatus.inProgress => PluginToolStatus.running,
+      CodexImageGenerationStatus.completed => PluginToolStatus.completed,
+      CodexImageGenerationStatus.failed => PluginToolStatus.error,
+      CodexImageGenerationStatus.unknown => completed ? PluginToolStatus.completed : PluginToolStatus.running,
+    };
+    return CodexRolloutImageGeneration(
+      id: _usefulText(item.id),
+      status: status,
+      attachments: status == PluginToolStatus.completed
+          ? _imageAttachmentMapper.map(
+              candidates: [
+                CodexImageAttachmentCandidate.base64(
+                  data: item.result,
+                  mime: "image/png",
+                  filenameHint: item.savedPath,
+                ),
+              ],
+            )
+          : const [],
+    );
+  }
+
   List<PluginMessageAttachment> boundAttachments({
     required Iterable<PluginMessageAttachment> attachments,
   }) => _imageAttachmentMapper.boundMappedAttachments(
@@ -223,10 +277,11 @@ class CodexRolloutToolMapper {
   }) {
     return switch (payload) {
       CodexRolloutFunctionCallDto(:final name) => name.toLowerCase() == "wait",
+      CodexRolloutCustomToolCallDto(:final name, :final input) =>
+        name.toLowerCase() == "exec" && _isGeneratedImageInvocation(input),
       CodexRolloutMessageDto() ||
       CodexRolloutReasoningDto() ||
       CodexRolloutFunctionCallOutputDto() ||
-      CodexRolloutCustomToolCallDto() ||
       CodexRolloutCustomToolCallOutputDto() ||
       CodexRolloutWebSearchCallDto() ||
       CodexRolloutImageGenerationDto() ||
@@ -555,4 +610,20 @@ class CodexRolloutToolMapper {
     final trimmed = value?.trim();
     return trimmed == null || trimmed.isEmpty ? null : trimmed;
   }
+}
+
+final RegExp _generatedImageInvocationPattern = RegExp(
+  r"^\s*(?:await\s+)?tools\.image_gen__[A-Za-z0-9_]+\s*\([\s\S]*\)\s*;?\s*$",
+);
+
+final RegExp _forwardedGeneratedImageInvocationPattern = RegExp(
+  r"^\s*(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*await\s+"
+  r"tools\.image_gen__[A-Za-z0-9_]+\s*\([\s\S]*\)\s*;\s*"
+  r"generatedImage\(\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*\)\s*;?\s*$",
+);
+
+bool _isGeneratedImageInvocation(String input) {
+  if (_generatedImageInvocationPattern.hasMatch(input)) return true;
+  final forwarded = _forwardedGeneratedImageInvocationPattern.firstMatch(input);
+  return forwarded != null && forwarded.group(1) == forwarded.group(2);
 }

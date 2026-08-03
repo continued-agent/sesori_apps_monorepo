@@ -291,6 +291,37 @@ void main() {
       );
     });
 
+    test("image-generation completion events decode to a typed variant", () {
+      final line = CodexRolloutLineDto.fromJson({
+        "type": "event_msg",
+        "payload": {
+          "type": "image_generation_end",
+          "call_id": "image-1",
+          "status": "completed",
+          "revised_prompt": "private prompt",
+          "result": "AA==",
+          "saved_path": "/private/generated/final.png",
+        },
+      });
+
+      final event = (line as CodexRolloutEventMessageLineDto).payload;
+      expect(
+        event,
+        isA<CodexRolloutImageGenerationEndEventDto>()
+            .having((value) => value.callId, "callId", "image-1")
+            .having(
+              (value) => value.status,
+              "status",
+              CodexRolloutImageGenerationStatus.completed,
+            )
+            .having(
+              (value) => value.savedPath,
+              "savedPath",
+              "/private/generated/final.png",
+            ),
+      );
+    });
+
     test("readHeader does not read beyond its bounded scan window", () {
       final path = p.join(codexHome.path, "bounded-header.jsonl");
       final header = jsonEncode({
@@ -375,17 +406,18 @@ void main() {
       expect(output, isNot(contains("secret-source-content")));
     });
 
-    test("readTranscript names image-generation schema fields without values", () {
+    test("readTranscript names durable image schema fields without values", () {
       final path = p.join(codexHome.path, "malformed-image-transcript.jsonl");
       File(path).writeAsStringSync(
         '${jsonEncode({
-          "type": "response_item",
+          "type": "event_msg",
           "payload": {
-            "type": "image_generation_call",
-            "id": "secret-image-id",
+            "type": "image_generation_end",
+            "call_id": "secret-image-id",
             "status": "completed",
             "result": 42,
             "revised_prompt": "secret revised prompt",
+            "saved_path": "/secret/generated.png",
           },
         })}\n{}\n',
       );
@@ -397,9 +429,11 @@ void main() {
 
       expect(output, contains('status:enum("completed")'));
       expect(output, contains("result:int"));
-      expect(output, contains("<redacted-key>:String"));
+      expect(output, contains("revised_prompt:String"));
+      expect(output, contains("saved_path:String"));
       expect(output, isNot(contains("secret-image-id")));
       expect(output, isNot(contains("secret revised prompt")));
+      expect(output, isNot(contains("/secret/generated.png")));
     });
 
     test("readTranscript bounds malformed record schema output", () {
@@ -1165,6 +1199,129 @@ void main() {
         expect(attachment.filename, isNull);
         expect(part.toString(), isNot(contains("private prompt")));
       }
+    });
+
+    test("readMessages prefers durable image events over duplicate response items", () {
+      final path = _writeRollout(
+        codexHome,
+        path: "sessions/2026/08/03/rollout-durable-image-history.jsonl",
+        sessionId: "019a0000-1111-2222-3333-iiiiiiiiiii2",
+        cwd: "/repo/app",
+        extraLines: [
+          jsonEncode({
+            "type": "response_item",
+            "payload": {
+              "type": "image_generation_call",
+              "id": "image-1",
+              "status": "completed",
+              "result": "AQ==",
+            },
+          }),
+          jsonEncode({
+            "type": "event_msg",
+            "payload": {
+              "type": "image_generation_end",
+              "call_id": " image-1 ",
+              "status": "completed",
+              "revised_prompt": "private prompt",
+              "result": "AA==",
+              "saved_path": "/private/generated/final.png",
+            },
+          }),
+        ],
+      );
+
+      final messages = messageRepository.readMessages(
+        rolloutPath: path,
+        sessionId: "019a0000-1111-2222-3333-iiiiiiiiiii2",
+        structuredToolStatusByCallId: const {},
+      );
+
+      expect(messages, hasLength(1));
+      expect(messages.single.info.id, "image-1");
+      final part = messages.single.parts.single;
+      expect(part.tool, "image_generation");
+      expect(part.state?.status, PluginToolStatus.completed);
+      final attachment = part.state!.attachments.single as PluginMessageAttachmentInlineImage;
+      expect(attachment.base64, "AA==");
+      expect(attachment.filename, "final.png");
+    });
+
+    test("readMessages correlates id-less image records by durable result", () {
+      final path = _writeRollout(
+        codexHome,
+        path: "sessions/2026/08/03/rollout-idless-durable-image.jsonl",
+        sessionId: "019a0000-1111-2222-3333-iiiiiiiiiii3",
+        cwd: "/repo/app",
+        extraLines: [
+          jsonEncode({
+            "type": "response_item",
+            "payload": {
+              "type": "image_generation_call",
+              "status": "completed",
+              "result": "AA==",
+            },
+          }),
+          jsonEncode({
+            "type": "event_msg",
+            "payload": {
+              "type": "image_generation_end",
+              "call_id": "image-durable",
+              "status": "completed",
+              "revised_prompt": null,
+              "result": "AA==",
+              "saved_path": "/private/generated/final.png",
+            },
+          }),
+        ],
+      );
+
+      final messages = messageRepository.readMessages(
+        rolloutPath: path,
+        sessionId: "019a0000-1111-2222-3333-iiiiiiiiiii3",
+        structuredToolStatusByCallId: const {},
+      );
+
+      expect(messages, hasLength(1));
+      expect(messages.single.info.id, "image-durable");
+    });
+
+    test("blank durable image ids do not shift legacy message ids", () {
+      final path = _writeRollout(
+        codexHome,
+        path: "sessions/2026/08/03/rollout-blank-durable-image.jsonl",
+        sessionId: "019a0000-1111-2222-3333-iiiiiiiiiii4",
+        cwd: "/repo/app",
+        extraLines: [
+          jsonEncode({
+            "type": "event_msg",
+            "payload": {
+              "type": "image_generation_end",
+              "call_id": "   ",
+              "status": "completed",
+              "revised_prompt": null,
+              "result": "AQ==",
+              "saved_path": null,
+            },
+          }),
+          jsonEncode({
+            "type": "response_item",
+            "payload": {
+              "type": "image_generation_call",
+              "status": "completed",
+              "result": "AA==",
+            },
+          }),
+        ],
+      );
+
+      final messages = messageRepository.readMessages(
+        rolloutPath: path,
+        sessionId: "019a0000-1111-2222-3333-iiiiiiiiiii4",
+        structuredToolStatusByCallId: const {},
+      );
+
+      expect(messages.single.info.id, "m-1");
     });
 
     test("readMessages surfaces transcript read failures", () {

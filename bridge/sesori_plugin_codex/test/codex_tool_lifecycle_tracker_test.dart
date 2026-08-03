@@ -1,3 +1,4 @@
+import "package:codex_plugin/src/api/models/codex_image_bearing_item_dto.dart";
 import "package:codex_plugin/src/api/models/codex_rollout_dto.dart";
 import "package:codex_plugin/src/codex_app_server_client.dart";
 import "package:codex_plugin/src/repositories/codex_tool_lifecycle_tracker.dart";
@@ -28,6 +29,7 @@ void main() {
       );
 
     final firstStarted = target.observeAppServerTool(
+      imageGeneration: null,
       notification: _commandNotification(
         method: "item/started",
         itemId: "exec-1",
@@ -35,6 +37,7 @@ void main() {
       ),
     );
     final firstCompleted = target.observeAppServerTool(
+      imageGeneration: null,
       notification: _commandNotification(
         method: "item/completed",
         itemId: "exec-1",
@@ -44,6 +47,7 @@ void main() {
       ),
     );
     final secondStarted = target.observeAppServerTool(
+      imageGeneration: null,
       notification: _commandNotification(
         method: "item/started",
         itemId: "exec-2",
@@ -59,6 +63,7 @@ void main() {
     target.clearThread(threadId: "thread-1");
     expect(
       target.observeAppServerTool(
+        imageGeneration: null,
         notification: _commandNotification(
           method: "item/completed",
           itemId: "exec-2",
@@ -78,6 +83,7 @@ void main() {
 
     expect(
       target.observeAppServerTool(
+        imageGeneration: null,
         notification: _commandNotification(
           method: "item/started",
           itemId: "exec-1",
@@ -103,6 +109,7 @@ void main() {
     expect(
       target
           .observeAppServerTool(
+            imageGeneration: null,
             notification: _commandNotification(
               method: "item/started",
               itemId: "exec-1",
@@ -133,6 +140,7 @@ void main() {
     expect(
       target
           .observeAppServerTool(
+            imageGeneration: null,
             notification: _commandNotification(
               method: "item/started",
               itemId: "exec-1",
@@ -159,6 +167,7 @@ void main() {
     expect(
       target
           .observeAppServerTool(
+            imageGeneration: null,
             notification: _commandNotification(
               method: "item/started",
               itemId: "exec-1",
@@ -168,6 +177,112 @@ void main() {
           ?.canonicalId,
       "call-1",
     );
+  });
+
+  test("suppresses only complete generated image wrapper invocations", () {
+    final target = tracker();
+    final wrapper = CodexRolloutLineDto.fromJson({
+      "type": "response_item",
+      "payload": {
+        "type": "custom_tool_call",
+        "call_id": "call-image-wrapper",
+        "name": "exec",
+        "input": "await tools.image_gen__generate({prompt: 'private'});",
+      },
+    });
+    final literalSearch = CodexRolloutLineDto.fromJson({
+      "type": "response_item",
+      "payload": {
+        "type": "custom_tool_call",
+        "call_id": "call-search",
+        "name": "exec",
+        "input": "console.log('tools.image_gen__generate')",
+      },
+    });
+    final forwardedWrapper = CodexRolloutLineDto.fromJson({
+      "type": "response_item",
+      "payload": {
+        "type": "custom_tool_call",
+        "call_id": "call-forwarded-image-wrapper",
+        "name": "exec",
+        "input": "const result = await tools.image_gen__generate({prompt: 'private'}); generatedImage(result);",
+      },
+    });
+    final unrelatedForwarding = CodexRolloutLineDto.fromJson({
+      "type": "response_item",
+      "payload": {
+        "type": "custom_tool_call",
+        "call_id": "call-unrelated-forwarding",
+        "name": "exec",
+        "input": "const result = await tools.image_gen__generate({prompt: 'private'}); generatedImage(other);",
+      },
+    });
+
+    expect(
+      target.observeRolloutLine(threadId: "thread-1", line: wrapper),
+      isEmpty,
+    );
+    expect(
+      target.observeRolloutLine(threadId: "thread-1", line: literalSearch),
+      hasLength(1),
+    );
+    expect(
+      target.observeRolloutLine(
+        threadId: "thread-1",
+        line: forwardedWrapper,
+      ),
+      isEmpty,
+    );
+    expect(
+      target.observeRolloutLine(
+        threadId: "thread-1",
+        line: unrelatedForwarding,
+      ),
+      hasLength(1),
+    );
+  });
+
+  test("claims app-server images before durable rollout evidence", () {
+    final target = tracker();
+    final appServer = target.observeAppServerTool(
+      notification: const CodexServerNotification(
+        method: "item/completed",
+        params: {
+          "threadId": "thread-image",
+          "item": {
+            "type": "imageGeneration",
+            "id": "image-1",
+          },
+        },
+      ),
+      imageGeneration: const CodexImageGenerationItemDto(
+        id: "image-1",
+        status: CodexImageGenerationStatus.completed,
+        revisedPrompt: null,
+        result: "AA==",
+        savedPath: null,
+      ),
+    );
+
+    expect(appServer?.canonicalId, "image-1");
+    expect(appServer?.attachments, hasLength(1));
+
+    final durable = target.observeRolloutLine(
+      threadId: "thread-image",
+      line: CodexRolloutLineDto.fromJson({
+        "type": "event_msg",
+        "payload": {
+          "type": "image_generation_end",
+          "call_id": "image-1",
+          "status": "completed",
+          "revised_prompt": null,
+          "result": "AA==",
+          "saved_path": "/private/final.png",
+        },
+      }),
+    );
+    final attachment = durable.single.attachments.single as PluginMessageAttachmentInlineImage;
+    expect(attachment.filename, "final.png");
   });
 
   test("suppresses wait calls and projects their result onto the shell call", () {
@@ -780,6 +895,7 @@ void main() {
       );
 
     final completed = target.observeAppServerTool(
+      imageGeneration: null,
       notification: _commandNotification(
         method: "item/completed",
         itemId: "exec-1",
@@ -801,6 +917,7 @@ void main() {
       line: _shellCall(callId: "call-shell", turnId: "turn-1"),
     );
     final completed = target.observeAppServerTool(
+      imageGeneration: null,
       notification: _commandNotification(
         method: "item/completed",
         itemId: "exec-1",
@@ -833,6 +950,7 @@ void main() {
       );
 
     final failed = target.observeAppServerTool(
+      imageGeneration: null,
       notification: _commandNotification(
         method: "item/completed",
         itemId: "exec-1",
@@ -861,6 +979,7 @@ void main() {
       );
 
     final failed = target.observeAppServerTool(
+      imageGeneration: null,
       notification: const CodexServerNotification(
         method: "item/completed",
         params: {
@@ -889,6 +1008,7 @@ void main() {
 
     expect(
       target.observeAppServerTool(
+        imageGeneration: null,
         notification: _commandNotification(
           method: "item/started",
           itemId: "exec-1",

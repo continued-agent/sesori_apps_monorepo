@@ -41,6 +41,10 @@ class CodexMessageRepository {
     final toolTracker = CodexToolLifecycleTracker(
       rolloutToolMapper: _rolloutToolMapper,
     );
+    toolTracker.prepareRolloutReplay(
+      threadId: sessionId,
+      lines: lines,
+    );
     final messages = <PluginMessageWithParts?>[];
     final toolMessageIndexById = <String, int>{};
     final pendingUserMessages = <_PendingUserMessage>[];
@@ -213,6 +217,12 @@ class CodexMessageRepository {
           );
         case CodexRolloutImageGenerationDto():
           final generation = _rolloutToolMapper.mapImageGeneration(item: payload);
+          if (!toolTracker.shouldReplayLegacyImage(
+            threadId: sessionId,
+            image: payload,
+          )) {
+            continue;
+          }
           messageCounter += 1;
           if (generation.id != null) continue;
           final messageId = _persistedOrLegacyMessageId(

@@ -26,6 +26,7 @@ CodexPlugin createInjectedCodexPlugin({
   const rolloutToolMapper = CodexRolloutToolMapper(
     imageAttachmentMapper: imageAttachmentMapper,
   );
+  const imageBearingItemParser = CodexImageBearingItemParser();
   final catalogRepository = CodexCatalogRepository(rolloutApi: rolloutApi);
   final configReader = CodexConfigReader(environment: environment);
   final metadataRepository = CodexMetadataRepository(
@@ -50,7 +51,7 @@ CodexPlugin createInjectedCodexPlugin({
       pluginId: CodexPlugin.pluginId,
       projectCwd: projectCwd,
       imageAttachmentMapper: imageAttachmentMapper,
-      imageBearingItemParser: const CodexImageBearingItemParser(),
+      imageBearingItemParser: imageBearingItemParser,
       rolloutToolMapper: rolloutToolMapper,
       config: configReader.readDefaults(),
     ),
@@ -64,6 +65,7 @@ CodexPlugin createInjectedCodexPlugin({
     ),
     toolOutcomeRepository: resolvedToolOutcomeRepository,
     commandExecutionParser: const CodexCommandExecutionParser(),
+    imageBearingItemParser: imageBearingItemParser,
     projectCwd: projectCwd,
     onConnected: null,
     onDisconnected: null,

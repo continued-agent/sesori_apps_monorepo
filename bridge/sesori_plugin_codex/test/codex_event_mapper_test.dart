@@ -2,6 +2,7 @@ import "dart:io";
 
 import "package:codex_plugin/codex_plugin.dart";
 import "package:codex_plugin/src/api/codex_app_server_api.dart";
+import "package:codex_plugin/src/api/models/codex_image_bearing_item_dto.dart";
 import "package:codex_plugin/src/api/models/codex_rollout_dto.dart";
 import "package:codex_plugin/src/api/parsers/codex_image_bearing_item_parser.dart";
 import "package:codex_plugin/src/repositories/codex_thread_repository.dart";
@@ -1030,6 +1031,54 @@ void main() {
       );
     });
 
+    test("durable image-generation event preserves its saved filename", () {
+      final line = CodexRolloutLineDto.fromJson({
+        "timestamp": "2026-08-03T12:00:00Z",
+        "type": "event_msg",
+        "payload": {
+          "type": "image_generation_end",
+          "call_id": "image-durable",
+          "status": "future-terminal-status",
+          "revised_prompt": "private prompt",
+          "result": "AA==",
+          "saved_path": "/private/generated/final.png",
+        },
+      });
+
+      final events = rolloutLifecycle.mapRolloutLine(
+        threadId: "t-image-durable",
+        line: line,
+      );
+
+      final part = (events[1] as BridgeSseMessagePartUpdated).part;
+      expect(part.messageID, "image-durable");
+      expect(part.tool, "image_generation");
+      expect(part.state?.status, PluginToolStatus.completed);
+      final attachment = part.state!.attachments.single as PluginMessageAttachmentInlineImage;
+      expect(attachment.base64, "AA==");
+      expect(attachment.filename, "final.png");
+
+      final laterAppServerEvents = rolloutLifecycle.map(
+        const CodexServerNotification(
+          method: "item/completed",
+          params: {
+            "threadId": "t-image-durable",
+            "item": {
+              "type": "imageGeneration",
+              "id": "image-durable",
+              "status": "completed",
+              "revisedPrompt": null,
+              "result": "AA==",
+              "savedPath": null,
+            },
+          },
+        ),
+      );
+      final laterPart = (laterAppServerEvents[1] as BridgeSseMessagePartUpdated).part;
+      final laterAttachment = laterPart.state!.attachments.single as PluginMessageAttachmentInlineImage;
+      expect(laterAttachment.filename, "final.png");
+    });
+
     test("later app-server updates preserve richer rollout attachments", () {
       final call = CodexRolloutLineDto.fromJson({
         "type": "response_item",
@@ -1482,7 +1531,16 @@ class _ToolLifecycleHarness {
   }
 
   List<BridgeSseEvent> map(CodexServerNotification notification) {
-    final tool = _toolTracker.observeAppServerTool(notification: notification);
+    final item = notification.params["item"];
+    final image = item is Map
+        ? const CodexImageBearingItemParser().parse(
+            item: Map<String, dynamic>.from(item),
+          )
+        : null;
+    final tool = _toolTracker.observeAppServerTool(
+      notification: notification,
+      imageGeneration: image is CodexImageGenerationItemDto ? image : null,
+    );
     final threadId = notification.params["threadId"];
     if (tool == null || threadId is! String) {
       return _eventMapper.map(notification);
