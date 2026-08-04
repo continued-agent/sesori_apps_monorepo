@@ -179,6 +179,113 @@ void main() {
     );
   });
 
+  test("correlates a lone code-mode command with its app-server item", () {
+    final target = tracker();
+    target.observeRolloutLine(
+      threadId: "thread-1",
+      line: _rawExecCall(callId: "call-raw", turnId: "turn-1"),
+    );
+
+    final started = target.observeAppServerTool(
+      imageGeneration: null,
+      notification: _commandNotification(
+        method: "item/started",
+        itemId: "exec-1",
+        turnId: "turn-1",
+      ),
+    );
+    final completed = target.observeAppServerTool(
+      imageGeneration: null,
+      notification: _commandNotification(
+        method: "item/completed",
+        itemId: "exec-1",
+        turnId: "turn-1",
+        status: "completed",
+        exitCode: 0,
+      ),
+    );
+
+    expect(started?.canonicalId, "call-raw");
+    expect(completed?.canonicalId, "call-raw");
+    expect(completed?.status, PluginToolStatus.completed);
+  });
+
+  test("correlates code-mode commands containing invocation-like text", () {
+    final target = tracker();
+    target.observeRolloutLine(
+      threadId: "thread-1",
+      line: _codeModeExecCall(
+        callId: "call-raw",
+        turnId: "turn-1",
+        input: "await tools.exec_command({cmd: \"echo 'tools.exec_command('\"});",
+      ),
+    );
+
+    expect(
+      target
+          .observeAppServerTool(
+            imageGeneration: null,
+            notification: _commandNotification(
+              method: "item/started",
+              itemId: "exec-1",
+              turnId: "turn-1",
+            ),
+          )
+          ?.canonicalId,
+      "call-raw",
+    );
+  });
+
+  test("correlates code-mode commands with invocation whitespace", () {
+    final target = tracker();
+    target.observeRolloutLine(
+      threadId: "thread-1",
+      line: _codeModeExecCall(
+        callId: "call-raw",
+        turnId: "turn-1",
+        input: "await tools.exec_command ({cmd: 'pwd'});",
+      ),
+    );
+
+    expect(
+      target
+          .observeAppServerTool(
+            imageGeneration: null,
+            notification: _commandNotification(
+              method: "item/started",
+              itemId: "exec-1",
+              turnId: "turn-1",
+            ),
+          )
+          ?.canonicalId,
+      "call-raw",
+    );
+  });
+
+  test("does not correlate invocation text inside a string", () {
+    final target = tracker();
+    target.observeRolloutLine(
+      threadId: "thread-1",
+      line: _codeModeExecCall(
+        callId: "call-raw",
+        turnId: "turn-1",
+        input: "console.log('tools.exec_command(');",
+      ),
+    );
+
+    expect(
+      target.observeAppServerTool(
+        imageGeneration: null,
+        notification: _commandNotification(
+          method: "item/started",
+          itemId: "exec-1",
+          turnId: "turn-1",
+        ),
+      ),
+      isNull,
+    );
+  });
+
   test("suppresses only complete generated image wrapper invocations", () {
     final target = tracker();
     final wrapper = CodexRolloutLineDto.fromJson({
@@ -1177,13 +1284,25 @@ CodexRolloutLineDto _rawExecCall({
   required String callId,
   required String? turnId,
 }) {
+  return _codeModeExecCall(
+    callId: callId,
+    turnId: turnId,
+    input: "await tools.exec_command({cmd: 'pwd'});",
+  );
+}
+
+CodexRolloutLineDto _codeModeExecCall({
+  required String callId,
+  required String? turnId,
+  required String input,
+}) {
   return CodexRolloutLineDto.fromJson({
     "type": "response_item",
     "payload": {
       "type": "custom_tool_call",
       "call_id": callId,
       "name": "exec",
-      "input": "await tools.exec_command({cmd: 'pwd'});",
+      "input": input,
       if (turnId != null)
         "internal_chat_message_metadata_passthrough": {
           "turn_id": turnId,
