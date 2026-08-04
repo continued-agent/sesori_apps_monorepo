@@ -375,6 +375,21 @@ void main() {
             "text(JSON.stringify({structuredContent:r?.structuredContent,_meta:r?._meta}));\n",
       },
     });
+    final wrapperWithShadowedResultVariable = CodexRolloutLineDto.fromJson({
+      "type": "response_item",
+      "payload": {
+        "type": "custom_tool_call",
+        "call_id": "call-image-wrapper-with-shadowed-result",
+        "name": "exec",
+        "input":
+            "const r = await tools.image_gen__imagegen({prompt: 'private'});\n"
+            "for (const r of (r?.content ?? [])) {\n"
+            '  if (r.type === "image") image(r);\n'
+            '  else if (r.type === "text") text(r.text);\n'
+            "}\n"
+            "if (r?.image_url) generatedImage(r);\n",
+      },
+    });
     final malformedDirectedWrapper = CodexRolloutLineDto.fromJson({
       "type": "response_item",
       "payload": {
@@ -535,6 +550,13 @@ void main() {
       target.observeRolloutLine(
         threadId: "thread-1",
         line: imageWrapperWithAnotherTool,
+      ),
+      hasLength(1),
+    );
+    expect(
+      target.observeRolloutLine(
+        threadId: "thread-1",
+        line: wrapperWithShadowedResultVariable,
       ),
       hasLength(1),
     );
@@ -1070,6 +1092,334 @@ void main() {
     expect(aborted.status, PluginToolStatus.error);
   });
 
+  test("late app-server completion retains the aborted canonical identity", () {
+    final target = tracker();
+    target
+      ..observeRolloutLine(
+        threadId: "thread-1",
+        line: _taskEvent(type: "task_started", turnId: "turn-1"),
+      )
+      ..observeRolloutLine(
+        threadId: "thread-1",
+        line: _rawExecCall(callId: "call-exec", turnId: "turn-1"),
+      );
+    final started = target.observeAppServerTool(
+      imageGeneration: null,
+      notification: _commandNotification(
+        method: "item/started",
+        itemId: "exec-1",
+        turnId: "turn-1",
+      ),
+    );
+    target.observeRolloutLine(
+      threadId: "thread-1",
+      line: _toolOutput(
+        callId: "call-exec",
+        output:
+            "Script running with cell ID 7\n"
+            "Output:\n"
+            "early output\n"
+            "Output:\n"
+            "literal output\n"
+            "Script running with cell ID 7\n"
+            "Output:\n"
+            "second poll output",
+      ),
+    );
+    final aborted = target
+        .observeRolloutLine(
+          threadId: "thread-1",
+          line: _taskEvent(type: "turn_aborted", turnId: "turn-1"),
+        )
+        .single;
+    target.observeTerminalNotification(
+      notification: _terminalNotification(method: "error"),
+    );
+
+    final lateCompletion = target.observeAppServerTool(
+      imageGeneration: null,
+      notification: _commandNotification(
+        method: "item/completed",
+        itemId: "exec-1",
+        turnId: "turn-1",
+        status: "completed",
+        exitCode: 0,
+        output:
+            "early output\n"
+            "Output:\n"
+            "literal output\n"
+            "second poll output\n"
+            "late command output",
+      ),
+    );
+
+    expect(started?.canonicalId, "call-exec");
+    expect(aborted.status, PluginToolStatus.error);
+    expect(lateCompletion?.canonicalId, "call-exec");
+    expect(lateCompletion?.status, PluginToolStatus.error);
+    expect(lateCompletion?.output, contains("late command output"));
+    expect(
+      RegExp("early output").allMatches(lateCompletion?.output ?? ""),
+      hasLength(1),
+    );
+    expect(
+      RegExp("literal output").allMatches(lateCompletion?.output ?? ""),
+      hasLength(1),
+    );
+    expect(
+      RegExp("second poll output").allMatches(lateCompletion?.output ?? ""),
+      hasLength(1),
+    );
+
+    expect(
+      target.observeRolloutLine(
+        threadId: "thread-1",
+        line: _toolOutput(
+          callId: "call-exec",
+          output: "stale output",
+        ),
+      ),
+      isEmpty,
+    );
+  });
+
+  test("failed turn completion without rollout abort keeps late completion failed", () {
+    final target = tracker();
+    target
+      ..observeRolloutLine(
+        threadId: "thread-1",
+        line: _taskEvent(type: "task_started", turnId: "turn-1"),
+      )
+      ..observeRolloutLine(
+        threadId: "thread-1",
+        line: _rawExecCall(callId: "call-exec", turnId: "turn-1"),
+      )
+      ..observeAppServerTool(
+        imageGeneration: null,
+        notification: _commandNotification(
+          method: "item/started",
+          itemId: "exec-1",
+          turnId: "turn-1",
+        ),
+      )
+      ..observeTerminalNotification(
+        notification: _terminalNotification(
+          method: "turn/completed",
+          turnStatus: "failed",
+        ),
+      );
+
+    final lateCompletion = target.observeAppServerTool(
+      imageGeneration: null,
+      notification: _commandNotification(
+        method: "item/completed",
+        itemId: "exec-1",
+        turnId: "turn-1",
+        status: "completed",
+        exitCode: 0,
+      ),
+    );
+
+    expect(lateCompletion?.canonicalId, "call-exec");
+    expect(lateCompletion?.status, PluginToolStatus.error);
+  });
+
+  test("late completion preserves a newer active turn", () {
+    final target = tracker();
+    target
+      ..observeRolloutLine(
+        threadId: "thread-1",
+        line: _taskEvent(type: "task_started", turnId: "turn-1"),
+      )
+      ..observeRolloutLine(
+        threadId: "thread-1",
+        line: _rawExecCall(callId: "call-old", turnId: "turn-1"),
+      )
+      ..observeAppServerTool(
+        imageGeneration: null,
+        notification: _commandNotification(
+          method: "item/started",
+          itemId: "exec-old",
+          turnId: "turn-1",
+        ),
+      )
+      ..observeRolloutLine(
+        threadId: "thread-1",
+        line: _toolOutput(
+          callId: "call-old",
+          output: "Script running with cell ID 7\nOutput:\nearly output",
+        ),
+      )
+      ..observeRolloutLine(
+        threadId: "thread-1",
+        line: _taskEvent(type: "turn_aborted", turnId: "turn-1"),
+      )
+      ..observeTerminalNotification(
+        notification: _terminalNotification(method: "error"),
+      )
+      ..observeRolloutLine(
+        threadId: "thread-1",
+        line: _taskEvent(type: "task_started", turnId: "turn-2"),
+      )
+      ..observeRolloutLine(
+        threadId: "thread-1",
+        line: _shellCall(callId: "call-new", turnId: "turn-2"),
+      );
+
+    final lateCompletion = target.observeAppServerTool(
+      imageGeneration: null,
+      notification: _commandNotification(
+        method: "item/completed",
+        itemId: "exec-old",
+        turnId: null,
+        status: "completed",
+        exitCode: 0,
+        output: "late old output",
+      ),
+    );
+
+    expect(lateCompletion?.output, contains("late old output"));
+    expect(
+      target.observeRolloutLine(
+        threadId: "thread-1",
+        line: _toolOutput(
+          callId: "call-old",
+          output: "stale old output",
+        ),
+      ),
+      isEmpty,
+    );
+    expect(
+      target
+          .observeAppServerTool(
+            imageGeneration: null,
+            notification: _commandNotification(
+              method: "item/started",
+              itemId: "exec-new",
+              turnId: "turn-2",
+            ),
+          )
+          ?.canonicalId,
+      "call-new",
+    );
+  });
+
+  test("older terminal notification preserves rollout state for a newer turn", () {
+    final target = tracker();
+    target
+      ..observeRolloutLine(
+        threadId: "thread-1",
+        line: _taskEvent(type: "task_started", turnId: "turn-1"),
+      )
+      ..observeRolloutLine(
+        threadId: "thread-1",
+        line: _rawExecCall(callId: "call-old", turnId: "turn-1"),
+      )
+      ..observeAppServerTool(
+        imageGeneration: null,
+        notification: _commandNotification(
+          method: "item/started",
+          itemId: "exec-old",
+          turnId: "turn-1",
+        ),
+      )
+      ..observeRolloutLine(
+        threadId: "thread-1",
+        line: _taskEvent(type: "task_started", turnId: "turn-2"),
+      )
+      ..observeRolloutLine(
+        threadId: "thread-1",
+        line: _shellCall(callId: "call-new", turnId: "turn-2"),
+      );
+
+    expect(
+      target.observeTerminalNotification(
+        notification: _terminalNotification(
+          method: "turn/completed",
+          turnId: "turn-1",
+          turnStatus: "failed",
+        ),
+      ),
+      isEmpty,
+    );
+    expect(
+      target
+          .observeAppServerTool(
+            imageGeneration: null,
+            notification: _commandNotification(
+              method: "item/started",
+              itemId: "exec-new",
+              turnId: "turn-2",
+            ),
+          )
+          ?.canonicalId,
+      "call-new",
+    );
+  });
+
+  test("late completion preserves externally started turn correlation", () {
+    final target = tracker();
+    target
+      ..observeRolloutLine(
+        threadId: "thread-1",
+        line: _taskEvent(type: "task_started", turnId: "turn-1"),
+      )
+      ..observeRolloutLine(
+        threadId: "thread-1",
+        line: _rawExecCall(callId: "call-old", turnId: "turn-1"),
+      )
+      ..observeAppServerTool(
+        imageGeneration: null,
+        notification: _commandNotification(
+          method: "item/started",
+          itemId: "exec-old",
+          turnId: "turn-1",
+        ),
+      )
+      ..observeRolloutLine(
+        threadId: "thread-1",
+        line: _taskEvent(type: "turn_aborted", turnId: "turn-1"),
+      )
+      ..observeTerminalNotification(
+        notification: _terminalNotification(method: "error"),
+      )
+      ..observeRolloutLine(
+        threadId: "thread-1",
+        line: _shellCall(callId: "call-external", turnId: "turn-2"),
+      )
+      ..observeRolloutLine(
+        threadId: "thread-1",
+        line: _toolOutput(
+          callId: "call-external",
+          output: "already completed",
+        ),
+      )
+      ..observeAppServerTool(
+        imageGeneration: null,
+        notification: _commandNotification(
+          method: "item/completed",
+          itemId: "exec-old",
+          turnId: "turn-1",
+          status: "completed",
+          exitCode: 0,
+        ),
+      );
+
+    expect(
+      target
+          .observeAppServerTool(
+            imageGeneration: null,
+            notification: _commandNotification(
+              method: "item/started",
+              itemId: "exec-external",
+              turnId: "turn-2",
+            ),
+          )
+          ?.canonicalId,
+      "call-external",
+    );
+  });
+
   test("a later turn cannot complete a stale metadata-less call", () {
     final target = tracker();
     target
@@ -1312,19 +1662,33 @@ void main() {
 
   test("clear removes all lifecycle and alias state", () {
     final target = tracker();
-    target.observeRolloutLine(
-      threadId: "thread-1",
-      line: _shellCall(callId: "call-1", turnId: "turn-1"),
-    );
+    target
+      ..observeRolloutLine(
+        threadId: "thread-1",
+        line: _shellCall(callId: "call-1", turnId: "turn-1"),
+      )
+      ..observeAppServerTool(
+        imageGeneration: null,
+        notification: _commandNotification(
+          method: "item/started",
+          itemId: "exec-1",
+          turnId: "turn-1",
+        ),
+      )
+      ..observeTerminalNotification(
+        notification: _terminalNotification(method: "error"),
+      );
     target.clear();
 
     expect(
       target.observeAppServerTool(
         imageGeneration: null,
         notification: _commandNotification(
-          method: "item/started",
+          method: "item/completed",
           itemId: "exec-1",
           turnId: "turn-1",
+          status: "completed",
+          exitCode: 0,
         ),
       ),
       isNull,
@@ -1491,7 +1855,7 @@ CodexRolloutLineDto _userMessageEvent({required String message}) {
 CodexServerNotification _commandNotification({
   required String method,
   required String itemId,
-  required String turnId,
+  required String? turnId,
   String? status,
   int? exitCode,
   String? output,
@@ -1500,7 +1864,7 @@ CodexServerNotification _commandNotification({
     method: method,
     params: {
       "threadId": "thread-1",
-      "turnId": turnId,
+      "turnId": ?turnId,
       "item": {
         "type": "commandExecution",
         "id": itemId,
@@ -1509,6 +1873,24 @@ CodexServerNotification _commandNotification({
         "exitCode": ?exitCode,
         "aggregatedOutput": ?output,
       },
+    },
+  );
+}
+
+CodexServerNotification _terminalNotification({
+  required String method,
+  String? turnId,
+  String? turnStatus,
+}) {
+  return CodexServerNotification(
+    method: method,
+    params: {
+      "threadId": "thread-1",
+      if (turnId != null || turnStatus != null)
+        "turn": {
+          "id": ?turnId,
+          "status": ?turnStatus,
+        },
     },
   );
 }
