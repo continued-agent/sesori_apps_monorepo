@@ -1,4 +1,5 @@
 import "dart:async";
+import "dart:typed_data";
 
 import "package:mocktail/mocktail.dart";
 import "package:rxdart/rxdart.dart";
@@ -8,6 +9,8 @@ import "package:sesori_dart_core/src/capabilities/server_connection/models/sse_e
 import "package:sesori_dart_core/src/capabilities/server_connection/server_connection_config.dart";
 import "package:sesori_dart_core/src/cubits/session_detail/session_detail_cubit.dart";
 import "package:sesori_dart_core/src/cubits/session_detail/session_detail_state.dart";
+import "package:sesori_dart_core/src/foundation/models/composer/composer_attachment.dart";
+import "package:sesori_dart_core/src/foundation/models/composer/composer_draft.dart";
 import "package:sesori_dart_core/src/platform/notification_canceller.dart";
 import "package:sesori_dart_core/src/repositories/permission_repository.dart";
 import "package:sesori_dart_core/src/services/session_detail_load_service.dart";
@@ -137,6 +140,7 @@ void main() {
           snapshot: SessionDetailSnapshot(
             projectId: "project-1",
             pluginId: "opencode",
+            supportsPromptAttachments: false,
             messages: <MessageWithParts>[],
             pendingQuestions: <PendingQuestion>[],
             pendingPermissions: <PendingPermission>[],
@@ -202,6 +206,7 @@ void main() {
           snapshot: SessionDetailSnapshot(
             projectId: "project-1",
             pluginId: "opencode",
+            supportsPromptAttachments: false,
             messages: <MessageWithParts>[],
             pendingQuestions: <PendingQuestion>[],
             pendingPermissions: <PendingPermission>[],
@@ -263,6 +268,7 @@ void main() {
           snapshot: SessionDetailSnapshot(
             projectId: "project-1",
             pluginId: "opencode",
+            supportsPromptAttachments: false,
             messages: <MessageWithParts>[],
             pendingQuestions: <PendingQuestion>[],
             pendingPermissions: <PendingPermission>[],
@@ -313,6 +319,7 @@ void main() {
           snapshot: SessionDetailSnapshot(
             projectId: "project-1",
             pluginId: "opencode",
+            supportsPromptAttachments: false,
             messages: <MessageWithParts>[],
             pendingQuestions: <PendingQuestion>[],
             pendingPermissions: <PendingPermission>[],
@@ -374,6 +381,397 @@ void main() {
       expect(state.availableCommands.map((command) => command.name), ["newest"]);
     });
 
+    test("silent refresh fails closed when attachment support is unresolved", () async {
+      final mockLoadService = MockSessionDetailLoadService();
+      SessionDetailSnapshot snapshot({required bool? supportsPromptAttachments}) {
+        return SessionDetailSnapshot(
+          projectId: "project-1",
+          pluginId: "codex",
+          supportsPromptAttachments: supportsPromptAttachments,
+          messages: const <MessageWithParts>[],
+          pendingQuestions: const <PendingQuestion>[],
+          pendingPermissions: const <PendingPermission>[],
+          childSessions: const <Session>[],
+          statuses: const <String, SessionStatus>{},
+          agents: const <AgentInfo?>[],
+          providerData: null,
+          commands: const <CommandInfo>[],
+          canonicalSessionTitle: null,
+          promptDefaults: null,
+          isRootSession: true,
+          isArchived: false,
+        );
+      }
+
+      when(
+        () => mockLoadService.load(
+          sessionId: _sessionId,
+          projectId: any(named: "projectId"),
+        ),
+      ).thenAnswer(
+        (_) async => SessionDetailLoadResult.loaded(
+          snapshot: snapshot(supportsPromptAttachments: true),
+          isBridgeConnected: true,
+        ),
+      );
+      when(
+        () => mockLoadService.reload(
+          sessionId: _sessionId,
+          projectId: any(named: "projectId"),
+        ),
+      ).thenAnswer(
+        (_) async => SessionDetailLoadResult.loaded(
+          snapshot: snapshot(supportsPromptAttachments: null),
+          isBridgeConnected: true,
+        ),
+      );
+
+      final cubit = createCubit(loadService: mockLoadService);
+      await _awaitLoaded(cubit);
+      expect((cubit.state as SessionDetailLoaded).supportsPromptAttachments, isTrue);
+
+      mockConnectionService.emitDataMayBeStale();
+      await untilCalled(
+        () => mockLoadService.reload(
+          sessionId: _sessionId,
+          projectId: any(named: "projectId"),
+        ),
+      );
+      for (var i = 0; i < 100; i++) {
+        final state = cubit.state;
+        if (state is SessionDetailLoaded && !state.isRefreshing) break;
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+      }
+
+      final refreshed = cubit.state as SessionDetailLoaded;
+      expect(refreshed.isRefreshing, isFalse);
+      expect(refreshed.supportsPromptAttachments, isNull);
+    });
+
+    test("queued attachment waits for a current capability load after reconnect", () async {
+      final mockLoadService = MockSessionDetailLoadService();
+      final refreshes = <Completer<SessionDetailLoadResult>>[];
+      const snapshot = SessionDetailSnapshot(
+        projectId: "project-1",
+        pluginId: "codex",
+        supportsPromptAttachments: true,
+        messages: <MessageWithParts>[],
+        pendingQuestions: <PendingQuestion>[],
+        pendingPermissions: <PendingPermission>[],
+        childSessions: <Session>[],
+        statuses: <String, SessionStatus>{},
+        agents: <AgentInfo?>[],
+        providerData: null,
+        commands: <CommandInfo>[],
+        canonicalSessionTitle: null,
+        promptDefaults: null,
+        isRootSession: true,
+        isArchived: false,
+      );
+      when(
+        () => mockLoadService.load(
+          sessionId: _sessionId,
+          projectId: any(named: "projectId"),
+        ),
+      ).thenAnswer(
+        (_) async => const SessionDetailLoadResult.loaded(
+          snapshot: snapshot,
+          isBridgeConnected: true,
+        ),
+      );
+      when(
+        () => mockLoadService.reload(
+          sessionId: _sessionId,
+          projectId: any(named: "projectId"),
+        ),
+      ).thenAnswer((_) {
+        final refresh = Completer<SessionDetailLoadResult>();
+        refreshes.add(refresh);
+        return refresh.future;
+      });
+      var sendCalls = 0;
+      when(
+        () => mockSessionRepository.sendMessage(
+          sessionId: any(named: "sessionId"),
+          text: any(named: "text"),
+          attachments: any(named: "attachments"),
+          agent: any(named: "agent"),
+          model: any(named: "model"),
+          variant: any(named: "variant"),
+          command: any(named: "command"),
+        ),
+      ).thenAnswer((_) async {
+        sendCalls++;
+        return sendCalls == 1 ? ApiResponse<void>.error(ApiError.generic()) : ApiResponse<void>.success(null);
+      });
+
+      final cubit = createCubit(loadService: mockLoadService);
+      await _awaitLoaded(cubit);
+      await cubit.sendMessage(
+        text: "look at this",
+        command: null,
+        inputMode: ComposerInputMode.typed,
+        attachments: [
+          ComposerAttachment(
+            mime: "image/png",
+            bytes: Uint8List(1),
+            filename: "shot.png",
+          ),
+        ],
+      );
+      expect(sendCalls, 1);
+      expect((cubit.state as SessionDetailLoaded).queuedMessages, hasLength(1));
+
+      unawaited(cubit.reload());
+      await _awaitCondition(() => refreshes.length == 1);
+      connectionStatus.add(
+        const ConnectionStatus.connectionLost(
+          config: ServerConnectionConfig(relayHost: "relay.example.com", authToken: "token"),
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(cubit.state, isA<SessionDetailLoading>());
+
+      connectionStatus.add(connectedStatus);
+      expect(sendCalls, 1);
+
+      refreshes.first.complete(
+        const SessionDetailLoadResult.loaded(
+          snapshot: snapshot,
+          isBridgeConnected: true,
+        ),
+      );
+      await _awaitCondition(() => refreshes.length == 2);
+      expect(sendCalls, 1);
+
+      refreshes[1].complete(
+        const SessionDetailLoadResult.loaded(
+          snapshot: snapshot,
+          isBridgeConnected: true,
+        ),
+      );
+      for (var i = 0; i < 100 && sendCalls < 2; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+      }
+
+      expect(sendCalls, 2);
+      expect((cubit.state as SessionDetailLoaded).queuedMessages, isEmpty);
+    });
+
+    test("stale pre-disconnect refresh cannot authorize a queued attachment", () async {
+      final mockLoadService = MockSessionDetailLoadService();
+      const supportedSnapshot = SessionDetailSnapshot(
+        projectId: "project-1",
+        pluginId: "codex",
+        supportsPromptAttachments: true,
+        messages: <MessageWithParts>[],
+        pendingQuestions: <PendingQuestion>[],
+        pendingPermissions: <PendingPermission>[],
+        childSessions: <Session>[],
+        statuses: <String, SessionStatus>{},
+        agents: <AgentInfo?>[],
+        providerData: null,
+        commands: <CommandInfo>[],
+        canonicalSessionTitle: null,
+        promptDefaults: null,
+        isRootSession: true,
+        isArchived: false,
+      );
+      const unsupportedSnapshot = SessionDetailSnapshot(
+        projectId: "project-1",
+        pluginId: "codex",
+        supportsPromptAttachments: false,
+        messages: <MessageWithParts>[],
+        pendingQuestions: <PendingQuestion>[],
+        pendingPermissions: <PendingPermission>[],
+        childSessions: <Session>[],
+        statuses: <String, SessionStatus>{},
+        agents: <AgentInfo?>[],
+        providerData: null,
+        commands: <CommandInfo>[],
+        canonicalSessionTitle: null,
+        promptDefaults: null,
+        isRootSession: true,
+        isArchived: false,
+      );
+      when(
+        () => mockLoadService.load(
+          sessionId: _sessionId,
+          projectId: any(named: "projectId"),
+        ),
+      ).thenAnswer(
+        (_) async => const SessionDetailLoadResult.loaded(
+          snapshot: supportedSnapshot,
+          isBridgeConnected: true,
+        ),
+      );
+      final refreshes = <Completer<SessionDetailLoadResult>>[];
+      when(
+        () => mockLoadService.reload(
+          sessionId: _sessionId,
+          projectId: any(named: "projectId"),
+        ),
+      ).thenAnswer((_) {
+        final refresh = Completer<SessionDetailLoadResult>();
+        refreshes.add(refresh);
+        return refresh.future;
+      });
+      var sendCalls = 0;
+      when(
+        () => mockSessionRepository.sendMessage(
+          sessionId: any(named: "sessionId"),
+          text: any(named: "text"),
+          attachments: any(named: "attachments"),
+          agent: any(named: "agent"),
+          model: any(named: "model"),
+          variant: any(named: "variant"),
+          command: any(named: "command"),
+        ),
+      ).thenAnswer((_) async {
+        sendCalls++;
+        return sendCalls == 1 ? ApiResponse<void>.error(ApiError.generic()) : ApiResponse<void>.success(null);
+      });
+
+      final cubit = createCubit(loadService: mockLoadService);
+      await _awaitLoaded(cubit);
+      await cubit.sendMessage(
+        text: "look at this",
+        command: null,
+        inputMode: ComposerInputMode.typed,
+        attachments: [
+          ComposerAttachment(
+            mime: "image/png",
+            bytes: Uint8List(1),
+            filename: "shot.png",
+          ),
+        ],
+      );
+      expect(sendCalls, 1);
+
+      mockConnectionService.emitDataMayBeStale();
+      await _awaitCondition(() => refreshes.length == 1);
+      connectionStatus.add(
+        const ConnectionStatus.connectionLost(
+          config: ServerConnectionConfig(relayHost: "relay.example.com", authToken: "token"),
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      connectionStatus.add(connectedStatus);
+
+      refreshes.first.complete(
+        const SessionDetailLoadResult.loaded(
+          snapshot: supportedSnapshot,
+          isBridgeConnected: true,
+        ),
+      );
+      await _awaitCondition(() => refreshes.length == 2);
+      expect(sendCalls, 1);
+      expect((cubit.state as SessionDetailLoaded).supportsPromptAttachments, isNull);
+
+      refreshes[1].complete(
+        const SessionDetailLoadResult.loaded(
+          snapshot: unsupportedSnapshot,
+          isBridgeConnected: true,
+        ),
+      );
+      await _awaitCondition(() {
+        final state = cubit.state;
+        return state is SessionDetailLoaded && !state.isRefreshing;
+      });
+
+      expect(sendCalls, 1);
+      final state = cubit.state as SessionDetailLoaded;
+      expect(state.supportsPromptAttachments, isFalse);
+      expect(state.queuedMessages, hasLength(1));
+
+      await cubit.sendMessage(
+        text: "continue without the image",
+        command: null,
+        inputMode: ComposerInputMode.typed,
+        attachments: const [],
+      );
+      expect(sendCalls, 1);
+      expect((cubit.state as SessionDetailLoaded).queuedMessages, hasLength(2));
+
+      cubit.cancelQueuedMessage(0);
+      await _awaitCondition(() => sendCalls == 2);
+      expect((cubit.state as SessionDetailLoaded).queuedMessages, isEmpty);
+    });
+
+    test("stale pre-disconnect failure cannot overwrite the reconnect load", () async {
+      final mockLoadService = MockSessionDetailLoadService();
+      const snapshot = SessionDetailSnapshot(
+        projectId: "project-1",
+        pluginId: "codex",
+        supportsPromptAttachments: true,
+        messages: <MessageWithParts>[],
+        pendingQuestions: <PendingQuestion>[],
+        pendingPermissions: <PendingPermission>[],
+        childSessions: <Session>[],
+        statuses: <String, SessionStatus>{},
+        agents: <AgentInfo?>[],
+        providerData: null,
+        commands: <CommandInfo>[],
+        canonicalSessionTitle: null,
+        promptDefaults: null,
+        isRootSession: true,
+        isArchived: false,
+      );
+      when(
+        () => mockLoadService.load(
+          sessionId: _sessionId,
+          projectId: any(named: "projectId"),
+        ),
+      ).thenAnswer(
+        (_) async => const SessionDetailLoadResult.loaded(
+          snapshot: snapshot,
+          isBridgeConnected: true,
+        ),
+      );
+      final refreshes = <Completer<SessionDetailLoadResult>>[];
+      when(
+        () => mockLoadService.reload(
+          sessionId: _sessionId,
+          projectId: any(named: "projectId"),
+        ),
+      ).thenAnswer((_) {
+        final refresh = Completer<SessionDetailLoadResult>();
+        refreshes.add(refresh);
+        return refresh.future;
+      });
+
+      final cubit = createCubit(loadService: mockLoadService);
+      await _awaitLoaded(cubit);
+
+      unawaited(cubit.reload());
+      await _awaitCondition(() => refreshes.length == 1);
+      connectionStatus.add(
+        const ConnectionStatus.connectionLost(
+          config: ServerConnectionConfig(relayHost: "relay.example.com", authToken: "token"),
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      connectionStatus.add(connectedStatus);
+
+      refreshes.first.complete(
+        SessionDetailLoadResult.failed(
+          error: ApiError.generic(),
+          stackTrace: StackTrace.current,
+        ),
+      );
+      await _awaitCondition(() => refreshes.length == 2);
+      expect(cubit.state, isA<SessionDetailLoading>());
+
+      refreshes[1].complete(
+        const SessionDetailLoadResult.loaded(
+          snapshot: snapshot,
+          isBridgeConnected: true,
+        ),
+      );
+      await _awaitLoaded(cubit);
+      expect((cubit.state as SessionDetailLoaded).supportsPromptAttachments, isTrue);
+    });
+
     test("clears pending events when load fails", () async {
       final mockLoadService = MockSessionDetailLoadService();
       final completer = Completer<SessionDetailLoadResult>();
@@ -427,6 +825,7 @@ void main() {
           snapshot: SessionDetailSnapshot(
             projectId: "project-1",
             pluginId: "opencode",
+            supportsPromptAttachments: false,
             messages: <MessageWithParts>[],
             pendingQuestions: <PendingQuestion>[],
             pendingPermissions: <PendingPermission>[],
@@ -499,6 +898,7 @@ void main() {
           snapshot: SessionDetailSnapshot(
             projectId: "project-1",
             pluginId: "opencode",
+            supportsPromptAttachments: false,
             messages: <MessageWithParts>[],
             pendingQuestions: <PendingQuestion>[],
             pendingPermissions: <PendingPermission>[],
@@ -535,6 +935,7 @@ void main() {
           snapshot: SessionDetailSnapshot(
             projectId: "project-1",
             pluginId: "opencode",
+            supportsPromptAttachments: false,
             messages: <MessageWithParts>[],
             pendingQuestions: <PendingQuestion>[],
             pendingPermissions: <PendingPermission>[],
@@ -617,6 +1018,7 @@ void main() {
           snapshot: SessionDetailSnapshot(
             projectId: "project-1",
             pluginId: "opencode",
+            supportsPromptAttachments: false,
             messages: <MessageWithParts>[],
             pendingQuestions: <PendingQuestion>[],
             pendingPermissions: <PendingPermission>[],

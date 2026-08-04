@@ -111,6 +111,7 @@ SessionDetailLoaded _loadedState({
   Map<String, SessionStatus> childStatuses = const {},
   SessionStatus sessionStatus = const SessionStatus.idle(),
   String? pluginId = "opencode",
+  bool? supportsPromptAttachments = true,
 }) {
   final provider = testProviderListResponse().items.first;
   return SessionDetailLoaded(
@@ -121,6 +122,7 @@ SessionDetailLoaded _loadedState({
     pendingPermissions: pendingPermissions,
     sessionTitle: "Session",
     pluginId: pluginId,
+    supportsPromptAttachments: supportsPromptAttachments,
     agent: null,
     assistantAgentModel: null,
     children: children,
@@ -268,6 +270,7 @@ void main() {
       pendingPermissions: const [],
       sessionTitle: "Session",
       pluginId: "opencode",
+      supportsPromptAttachments: false,
       agent: null,
       assistantAgentModel: null,
       children: const [],
@@ -1798,6 +1801,14 @@ void main() {
   testWidgets("accordion attach action stages a removable thumbnail without raising the keyboard", (tester) async {
     final attachment = ComposerAttachment(mime: "image/png", bytes: _tinyPng, filename: "screenshot.png");
     when(imagePicker.pickImage).thenAnswer((_) async => attachment);
+    final state = _loadedState(
+      pendingQuestions: const [],
+      pendingPermissions: const [],
+      pluginId: "codex",
+      supportsPromptAttachments: true,
+    );
+    when(() => cubit.state).thenReturn(state);
+    whenListen(cubit, const Stream<SessionDetailState>.empty(), initialState: state);
 
     await tester.pumpWidget(_buildApp(cubit: cubit));
     await tester.pumpAndSettle();
@@ -2049,7 +2060,7 @@ void main() {
       find.descendant(of: find.byType(EditableText), matching: find.byType(RawGestureDetector)).first,
     );
     Actions.invoke(actionContext, const PasteTextIntent(SelectionChangedCause.keyboard));
-    stateController.add(opencodeState.copyWith(pluginId: "codex"));
+    stateController.add(opencodeState.copyWith(supportsPromptAttachments: false));
     await tester.pumpAndSettle();
     stateController.add(opencodeState);
     await tester.pumpAndSettle();
@@ -2060,13 +2071,12 @@ void main() {
     verifyNever(() => imagePicker.attachmentFromBytes(bytes: _tinyPng, filename: null));
   });
 
-  testWidgets("accordion offers no attach action on a harness that drops image parts", (tester) async {
-    // TEMPORARY 2026-08-03: remove with the harness gate once every harness
-    // carries image parts — see harnessSupportsPromptAttachments.
+  testWidgets("accordion offers no attach action when the plugin declares no support", (tester) async {
     final state = _loadedState(
       pendingQuestions: const [],
       pendingPermissions: const [],
-      pluginId: "codex",
+      pluginId: "opencode",
+      supportsPromptAttachments: false,
     );
     when(() => cubit.state).thenReturn(state);
     whenListen(cubit, const Stream<SessionDetailState>.empty(), initialState: state);
@@ -2080,6 +2090,53 @@ void main() {
     expect(find.byIcon(TablerRegular.photo), findsNothing);
     // The accordion still opens for its other action.
     expect(find.byIcon(TablerRegular.slash), findsOneWidget);
+  });
+
+  testWidgets("staged attachment survives unresolved support but cannot send", (tester) async {
+    final attachment = ComposerAttachment(mime: "image/png", bytes: _tinyPng, filename: "screenshot.png");
+    when(imagePicker.pickImage).thenAnswer((_) async => attachment);
+    when(
+      () => cubit.sendMessage(
+        text: any(named: "text"),
+        command: any(named: "command"),
+        inputMode: any(named: "inputMode"),
+        attachments: any(named: "attachments"),
+      ),
+    ).thenAnswer((_) async {});
+    final states = StreamController<SessionDetailState>.broadcast();
+    addTearDown(states.close);
+    final supported = _loadedState(
+      pendingQuestions: const [],
+      pendingPermissions: const [],
+      pluginId: "codex",
+      supportsPromptAttachments: true,
+    );
+    whenListen(cubit, states.stream, initialState: supported);
+
+    await tester.pumpWidget(_buildApp(cubit: cubit));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(TablerRegular.chevron_right));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(TablerRegular.photo));
+    await tester.pumpAndSettle();
+
+    states.add(supported.copyWith(supportsPromptAttachments: null));
+    await tester.pumpAndSettle();
+    expect(semanticsWithLabel("screenshot.png"), findsOneWidget);
+    await tester.tap(find.byIcon(TablerRegular.arrow_up));
+    await tester.pump();
+    verifyNever(
+      () => cubit.sendMessage(
+        text: any(named: "text"),
+        command: any(named: "command"),
+        inputMode: any(named: "inputMode"),
+        attachments: any(named: "attachments"),
+      ),
+    );
+
+    states.add(supported.copyWith(supportsPromptAttachments: false));
+    await tester.pumpAndSettle();
+    expect(semanticsWithLabel("screenshot.png"), findsNothing);
   });
 
   testWidgets("send includes the staged attachment and clears the strip", (tester) async {
