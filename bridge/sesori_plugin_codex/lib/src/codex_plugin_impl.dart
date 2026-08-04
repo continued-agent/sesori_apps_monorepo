@@ -1024,15 +1024,19 @@ class CodexPlugin implements CodexManagedApi {
 
   @override
   Future<void> archiveSession({required String sessionId}) async {
-    try {
-      final client = await _connectedClient();
-      await client.request(
-        method: "thread/archive",
-        params: {"threadId": sessionId},
-      );
-    } catch (_) {
-      // Best-effort — mobile DB archive state is authoritative.
-    }
+    // Codex moves archived rollouts out of the readable session catalog, while
+    // the bridge contract intentionally keeps archive state local-only.
+    // Explicitly retained as commented code rather than deleted at reviewer
+    // request to document the disabled backend behavior.
+    // try {
+    //   final client = await _connectedClient();
+    //   await client.request(
+    //     method: "thread/archive",
+    //     params: {"threadId": sessionId},
+    //   );
+    // } catch (_) {
+    //   // Best-effort — mobile DB archive state is authoritative.
+    // }
   }
 
   @override
