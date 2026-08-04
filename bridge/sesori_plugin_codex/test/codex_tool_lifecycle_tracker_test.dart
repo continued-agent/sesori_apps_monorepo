@@ -210,6 +210,103 @@ void main() {
     expect(completed?.status, PluginToolStatus.completed);
   });
 
+  test("correlates a code-mode patch with its app-server file change", () {
+    final target = tracker();
+    target.observeRolloutLine(
+      threadId: "thread-1",
+      line: CodexRolloutLineDto.fromJson({
+        "type": "response_item",
+        "payload": {
+          "type": "custom_tool_call",
+          "call_id": "call-malformed-patch",
+          "name": "exec",
+          "input":
+              'const patch = "not a patch";\n'
+              "text(await tools.apply_patch(patch));\n",
+          "internal_chat_message_metadata_passthrough": {
+            "turn_id": "turn-1",
+          },
+        },
+      }),
+    );
+    final call = CodexRolloutLineDto.fromJson({
+      "type": "response_item",
+      "payload": {
+        "type": "custom_tool_call",
+        "call_id": "call-patch",
+        "name": "exec",
+        "input":
+            'const patch = "*** Begin Patch\\n*** Add File: marker.txt\\n+ALPHA\\n*** End Patch";\n'
+            "text(await tools.apply_patch(patch));\n",
+        "internal_chat_message_metadata_passthrough": {
+          "turn_id": "turn-1",
+        },
+      },
+    });
+
+    final rolloutCall = target
+        .observeRolloutLine(
+          threadId: "thread-1",
+          line: call,
+        )
+        .single;
+    final started = target.observeAppServerTool(
+      imageGeneration: null,
+      notification: _fileChangeNotification(
+        method: "item/started",
+        itemId: "exec-file-1",
+        turnId: "turn-1",
+        status: "inProgress",
+      ),
+    );
+    final completed = target.observeAppServerTool(
+      imageGeneration: null,
+      notification: _fileChangeNotification(
+        method: "item/completed",
+        itemId: "exec-file-1",
+        turnId: "turn-1",
+        status: "completed",
+      ),
+    );
+    target
+        .observeRolloutLine(
+          threadId: "thread-1",
+          line: _toolOutput(
+            callId: "call-patch",
+            output: "Script running with cell ID 7\nOutput:\n{}",
+          ),
+        )
+        .single;
+    target.observeRolloutLine(
+      threadId: "thread-1",
+      line: _waitCall(
+        callId: "call-wait",
+        turnId: "turn-1",
+        cellId: "7",
+      ),
+    );
+    final rolloutResult = target
+        .observeRolloutLine(
+          threadId: "thread-1",
+          line: _toolOutput(
+            callId: "call-wait",
+            output: "Script completed\nOutput:\n{}",
+          ),
+        )
+        .single;
+
+    expect(rolloutCall.tool, "edit");
+    expect(rolloutCall.title, "marker.txt");
+    expect(rolloutCall.output, contains("*** Add File: marker.txt"));
+    expect(started?.canonicalId, "call-patch");
+    expect(started?.tool, "edit");
+    expect(completed?.canonicalId, "call-patch");
+    expect(completed?.status, PluginToolStatus.completed);
+    expect(rolloutResult.tool, "edit");
+    expect(rolloutResult.output, contains("*** Add File: marker.txt"));
+    expect(rolloutResult.output, isNot(contains("Script completed")));
+  });
+
   test("correlates code-mode commands containing invocation-like text", () {
     final target = tracker();
     target.observeRolloutLine(
@@ -1872,6 +1969,33 @@ CodexServerNotification _commandNotification({
         "status": ?status,
         "exitCode": ?exitCode,
         "aggregatedOutput": ?output,
+      },
+    },
+  );
+}
+
+CodexServerNotification _fileChangeNotification({
+  required String method,
+  required String itemId,
+  required String turnId,
+  required String status,
+}) {
+  return CodexServerNotification(
+    method: method,
+    params: {
+      "threadId": "thread-1",
+      "turnId": turnId,
+      "item": {
+        "type": "fileChange",
+        "id": itemId,
+        "status": status,
+        "changes": [
+          {
+            "path": "marker.txt",
+            "kind": {"type": "add"},
+            "diff": "+ALPHA",
+          },
+        ],
       },
     },
   );
