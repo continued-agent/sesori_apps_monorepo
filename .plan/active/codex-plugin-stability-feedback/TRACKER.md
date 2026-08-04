@@ -4,15 +4,15 @@
 
 - **Plan slug:** `codex-plugin-stability-feedback`
 - **Implementation base:** `origin/main` at
-  `22f65807e525a7c1e7aa68e66cc8d0c9b6a4976d`
+  `5a67ee65e63a8594049fd27028700aa5c184b6c8`
 - **Stack root:** `2408b574`
-- **Series state:** Steps 1 through 8 merged; Step 9 PR
-  [#751](https://github.com/sesori-ai/sesori_apps_monorepo/pull/751) is open
-- **Current step:** Step 9/11
-- **Current branch:** `codex-stability-deep-test-9-mobile-images`
+- **Series state:** Steps 1 through 9 merged; Step 10 PR
+  [#753](https://github.com/sesori-ai/sesori_apps_monorepo/pull/753) is open
+- **Current step:** Step 10/11
+- **Current branch:** `codex-plugin-stability-feedback-f12-generated-repository-instructions`
 - **Plan PR:** [#724](https://github.com/sesori-ai/sesori_apps_monorepo/pull/724),
   merged as `149e7914` with the Step 1 production fix
-- **Next action:** Monitor Step 9 PR #751 and begin Step 10 locally
+- **Next action:** Monitor Step 10 PR #753 and begin Step 11 locally
 
 ## Plan Review
 
@@ -38,7 +38,7 @@
 | [x] | F-09 file identity | Fixed on `main` | D5 `9da8f2e1`; [#740](https://github.com/sesori-ai/sesori_apps_monorepo/pull/740); `b4455593`; D8 `d4e30b87`; [#749](https://github.com/sesori-ai/sesori_apps_monorepo/pull/749); `22f65807` | Typed boundary merged |
 | [x] | F-10 restart terminalization | Fixed on `main` | D6 `8f0f4ece`; [#743](https://github.com/sesori-ai/sesori_apps_monorepo/pull/743); `4b779cc2`; D8 `d4e30b87`; [#749](https://github.com/sesori-ai/sesori_apps_monorepo/pull/749); `22f65807` | Typed boundary merged |
 | [x] | F-11 archive history | Fixed on `main` | D7; `cdd3a305`; [#746](https://github.com/sesori-ai/sesori_apps_monorepo/pull/746); `4785f4c7` | Archive/unarchive remains readable and delete remains destructive |
-| [ ] | F-12 generated repository instructions | Confirmed; not fixed | Documented on D9 `ef2356c4` | Step 10 must hide complete generated AGENTS envelopes without hiding authored text |
+| [x] | F-12 generated repository instructions | Fixed on Step 10 branch | Documented on D9 `ef2356c4`; fixed by `2e534673` | Complete generated AGENTS envelopes are hidden without hiding authored text |
 
 ## Delivery Steps
 
@@ -52,8 +52,8 @@
 | [x] | 6/11 | `codex-stability-deep-test-6-restart-tool-terminalization` | `⚙️ [codex-plugin-stability-feedback] fix(codex): settle interrupted tools after restart [step 6/11]` | 380 actual | [PR #743](https://github.com/sesori-ai/sesori_apps_monorepo/pull/743) merged as `4b779cc2` |
 | [x] | 7/11 | `codex-stability-deep-test-7-local-archive-history` | `🌿 [codex-plugin-stability-feedback] fix(codex): preserve locally archived history [step 7/11]` | 384 actual | [PR #746](https://github.com/sesori-ai/sesori_apps_monorepo/pull/746) merged as `4785f4c7` |
 | [x] | 8/11 | `codex-stability-deep-test-8-typed-boundaries` | `🚧 [codex-plugin-stability-feedback] refactor(codex): type replay and item boundaries [step 8/11]` | 1,174 actual | [PR #749](https://github.com/sesori-ai/sesori_apps_monorepo/pull/749) merged as `22f65807` |
-| [ ] | 9/11 | `codex-stability-deep-test-9-mobile-images` | `🚧 [codex-plugin-stability-feedback] feat(codex): support mobile image prompts [step 9/11]` | 965 actual | [PR #751](https://github.com/sesori-ai/sesori_apps_monorepo/pull/751) open; verified after Step 8 and current `main` merged forward |
-| [ ] | 10/11 | `codex-plugin-stability-feedback-f12-generated-repository-instructions` | `🌿 [codex-plugin-stability-feedback] fix(codex): hide generated repository instructions [step 10/11]` | 70–140 | Planned after D9; confirmed F-12 fix |
+| [x] | 9/11 | `codex-stability-deep-test-9-mobile-images` | `🚧 [codex-plugin-stability-feedback] feat(codex): support mobile image prompts [step 9/11]` | 1,325 actual | [PR #751](https://github.com/sesori-ai/sesori_apps_monorepo/pull/751) merged as `5a67ee65` |
+| [ ] | 10/11 | `codex-plugin-stability-feedback-f12-generated-repository-instructions` | `🌿 [codex-plugin-stability-feedback] fix(codex): hide generated repository instructions [step 10/11]` | 170 actual | [PR #753](https://github.com/sesori-ai/sesori_apps_monorepo/pull/753) open; merged forward from `5a67ee65` and verified |
 | [ ] | 11/11 | `codex-plugin-stability-feedback-retire-plan` | `🌱 [codex-plugin-stability-feedback] docs: retire Codex stability feedback plan [step 11/11]` | 40–100 | Blocked on Step 10 merge |
 
 ## Exact PR Titles
@@ -394,11 +394,40 @@ origin/main
   or parameter was added.
 - **Step 9 cleanup:** The hardcoded composer attachment-support helper is
   removed. No database or cache artifact is obsolete.
-- **Step 9 change size:** 965 lines against the PR merge base, including the
-  compatible wire model, bridge/plugin/client flow, tests, report, and tracker.
-  This is below the 1,500-line soft cap.
+- **Step 9 change size:** 1,325 lines in the merged squash, including the
+  compatible wire model, bridge/plugin/client flow, tests, report, tracker, and
+  review follow-ups. This is below the 1,500-line soft cap.
 - **Step 9 delivery:** Pushed and opened as
-  [PR #751](https://github.com/sesori-ai/sesori_apps_monorepo/pull/751).
+  [PR #751](https://github.com/sesori-ai/sesori_apps_monorepo/pull/751), which
+  passed 15/15 checks and merged as `5a67ee65` on 2026-08-04. Review follow-ups
+  preserved legacy OpenCode compatibility, retained staged images while
+  capability is unresolved, fenced stale load failures, validated Codex inline
+  image payloads, and kept the declined capability-cache thread open with its
+  rationale.
+- **Step 10 successor update:** Branched directly from the pushed Step 9 head,
+  then merged `origin/main` at `5a67ee65` forward as `038d2271`. Merge
+  conflicts retained the newer Step 9 review fixes while preserving the Step 10
+  projection change; no rebase, reset, reorder, or cherry-pick occurred.
+- **Step 10 sanitized shape:** Confirmed the privacy-safe runtime structure as
+  an exact `# AGENTS.md instructions` header with an optional `for <directory>`
+  suffix, one blank line, and a complete `<INSTRUCTIONS>` envelope.
+- **Step 10 verification:** The regression failed before `2e534673`, then passed.
+  After the Step 9 merge, all 318 Codex tests, `dart analyze --fatal-infos`,
+  and `git diff --check` pass.
+  Tests preserve submitted exact envelopes, casing near matches, incomplete
+  markers, mixed authored text, path/no-path forms, and outer whitespace.
+- **Step 10 scope:** Classification stays inside `CodexMessageRepository` at the
+  existing cold-history projection boundary. No live/cold coordination,
+  architecture change, wire change, database change, or analytics change was
+  required, so no implementation architecture review applies.
+- **Step 10 cleanup:** Stored Codex rollouts remain untouched; only generated history projection changes. No artifact is obsolete.
+- **Step 10 change size:** 170 lines against merged `main`, including production
+  code, regression coverage, report, and tracker updates. This modestly exceeds
+  the planned 70-140 line estimate and remains far below the 1,500-line cap.
+- **Step 10 delivery:** Pushed and opened as
+  [PR #753](https://github.com/sesori-ai/sesori_apps_monorepo/pull/753). Qodo's
+  named-parameter and compact-envelope findings were fixed after a failing
+  compact regression.
 
 ## Findings And Plan Deltas
 
