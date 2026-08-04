@@ -1,3 +1,4 @@
+import "dart:async";
 import "dart:io";
 
 import "package:codex_plugin/src/api/codex_app_server_api.dart";
@@ -300,8 +301,43 @@ void main() {
       ),
     );
 
-    expect(await service.getSessionMessages(sessionId: "session-1"), isEmpty);
+    expect(
+      service.getSessionMessages(
+        sessionId: "session-1",
+        read: (await service.prepareSessionMessageRead(sessionId: "session-1"))!,
+        sessionStatus: const PluginSessionStatus.idle(),
+      ),
+      isEmpty,
+    );
     expect(messageRepository.statuses, isEmpty);
+    expect(messageRepository.sessionStatus, const PluginSessionStatus.idle());
+  });
+
+  test("prepares the transcript before replay activity is supplied", () async {
+    final messageRepository = _RecordingMessageRepository();
+    final outcomes = _DelayedToolOutcomeRepository();
+    final service = _newService(
+      catalogRepository: _FixedPathCatalogRepository(),
+      messageRepository: messageRepository,
+      toolOutcomeRepository: outcomes,
+    );
+    var sessionStatus = const PluginSessionStatus.idle();
+
+    final readFuture = service.prepareSessionMessageRead(
+      sessionId: "session-1",
+    );
+    await outcomes.readStarted.future;
+    outcomes.allowRead.complete();
+    final read = await readFuture;
+    expect(messageRepository.prepareCount, 1);
+    sessionStatus = const PluginSessionStatus.busy();
+    service.getSessionMessages(
+      sessionId: "session-1",
+      read: read!,
+      sessionStatus: sessionStatus,
+    );
+
+    expect(messageRepository.sessionStatus, const PluginSessionStatus.busy());
   });
 }
 
@@ -339,6 +375,23 @@ class _DeleteFailingCatalogRepository extends CodexCatalogRepository {
   bool deleteSession({required String sessionId}) => false;
 }
 
+class _DelayedToolOutcomeRepository extends CodexToolOutcomeRepository {
+  _DelayedToolOutcomeRepository()
+    : super(
+        storage: _ReadFailingToolOutcomeStorage(),
+      );
+
+  final readStarted = Completer<void>();
+  final allowRead = Completer<void>();
+
+  @override
+  Future<Map<String, PluginToolStatus>> readStatuses({required String sessionId}) async {
+    readStarted.complete();
+    await allowRead.future;
+    return const {};
+  }
+}
+
 class _FixedPathCatalogRepository extends CodexCatalogRepository {
   _FixedPathCatalogRepository() : super(rolloutApi: CodexRolloutApi(environment: const {}));
 
@@ -356,15 +409,28 @@ class _RecordingMessageRepository extends CodexMessageRepository {
       );
 
   Map<String, PluginToolStatus>? statuses;
+  PluginSessionStatus? sessionStatus;
+  int prepareCount = 0;
 
   @override
-  List<PluginMessageWithParts> readMessages({
+  CodexPreparedMessageRead prepareMessageRead({
     required String rolloutPath,
     required String sessionId,
+  }) {
+    prepareCount += 1;
+    return CodexPreparedMessageRead(lines: const []);
+  }
+
+  @override
+  List<PluginMessageWithParts> projectMessages({
+    required CodexPreparedMessageRead read,
+    required String sessionId,
+    required PluginSessionStatus sessionStatus,
     required Map<String, PluginToolStatus> structuredToolStatusByCallId,
     CodexConfigDefaults config = const CodexConfigDefaults.empty(),
   }) {
     statuses = structuredToolStatusByCallId;
+    this.sessionStatus = sessionStatus;
     return const [];
   }
 }
