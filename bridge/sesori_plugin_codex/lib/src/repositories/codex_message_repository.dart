@@ -3,6 +3,7 @@ import "package:sesori_plugin_interface/sesori_plugin_interface.dart";
 import "../api/codex_rollout_api.dart";
 import "../api/models/codex_rollout_dto.dart";
 import "../codex_config_reader.dart";
+import "../models/codex_replay_tool_disposition.dart";
 import "codex_tool_lifecycle_tracker.dart";
 import "mappers/codex_rollout_tool_mapper.dart";
 import "models/codex_projected_tool.dart";
@@ -27,7 +28,7 @@ class CodexMessageRepository {
   List<PluginMessageWithParts> readMessages({
     required String rolloutPath,
     required String sessionId,
-    required PluginSessionStatus sessionStatus,
+    required CodexReplayToolDisposition replayToolDisposition,
     required Map<String, PluginToolStatus> structuredToolStatusByCallId,
     CodexConfigDefaults config = const CodexConfigDefaults.empty(),
   }) {
@@ -37,7 +38,7 @@ class CodexMessageRepository {
         sessionId: sessionId,
       ),
       sessionId: sessionId,
-      sessionStatus: sessionStatus,
+      replayToolDisposition: replayToolDisposition,
       structuredToolStatusByCallId: structuredToolStatusByCallId,
       config: config,
     );
@@ -66,7 +67,7 @@ class CodexMessageRepository {
   List<PluginMessageWithParts> projectMessages({
     required CodexPreparedMessageRead read,
     required String sessionId,
-    required PluginSessionStatus sessionStatus,
+    required CodexReplayToolDisposition replayToolDisposition,
     required Map<String, PluginToolStatus> structuredToolStatusByCallId,
     CodexConfigDefaults config = const CodexConfigDefaults.empty(),
   }) {
@@ -270,7 +271,9 @@ class CodexMessageRepository {
               info: assistantInfo(id: messageId, time: messageTime),
               tool: "image_generation",
               title: null,
-              status: generation.status == PluginToolStatus.running && sessionStatus is PluginSessionStatusIdle
+              status:
+                  generation.status == PluginToolStatus.running &&
+                      replayToolDisposition == CodexReplayToolDisposition.terminalize
                   ? PluginToolStatus.error
                   : generation.status,
               output: null,
@@ -371,7 +374,7 @@ class CodexMessageRepository {
     }
     for (final tool in toolTracker.finishRolloutReplay(
       threadId: sessionId,
-      sessionStatus: sessionStatus,
+      disposition: replayToolDisposition,
     )) {
       upsertTool(tool: tool, timestamp: null);
     }

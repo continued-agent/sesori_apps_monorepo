@@ -9,6 +9,7 @@ import "package:codex_plugin/src/codex_app_server_client.dart";
 import "package:codex_plugin/src/codex_config_reader.dart";
 import "package:codex_plugin/src/codex_metadata_repository.dart";
 import "package:codex_plugin/src/models/codex_collaboration_mode.dart";
+import "package:codex_plugin/src/models/codex_replay_tool_disposition.dart";
 import "package:codex_plugin/src/repositories/codex_catalog_repository.dart";
 import "package:codex_plugin/src/repositories/codex_message_repository.dart";
 import "package:codex_plugin/src/repositories/codex_model_repository.dart";
@@ -310,7 +311,36 @@ void main() {
       isEmpty,
     );
     expect(messageRepository.statuses, isEmpty);
-    expect(messageRepository.sessionStatus, const PluginSessionStatus.idle());
+    expect(
+      messageRepository.replayToolDisposition,
+      CodexReplayToolDisposition.terminalize,
+    );
+  });
+
+  test("preserves unfinished replay tools for active session states", () async {
+    final messageRepository = _RecordingMessageRepository();
+    final service = _newService(
+      catalogRepository: _FixedPathCatalogRepository(),
+      messageRepository: messageRepository,
+    );
+    final read = await service.prepareSessionMessageRead(
+      sessionId: "session-1",
+    );
+
+    for (final status in const [
+      PluginSessionStatus.busy(),
+      PluginSessionStatus.retry(attempt: 1, message: "retrying", next: 2),
+    ]) {
+      service.getSessionMessages(
+        sessionId: "session-1",
+        read: read!,
+        sessionStatus: status,
+      );
+      expect(
+        messageRepository.replayToolDisposition,
+        CodexReplayToolDisposition.preserveRunning,
+      );
+    }
   });
 
   test("prepares the transcript before replay activity is supplied", () async {
@@ -337,7 +367,10 @@ void main() {
       sessionStatus: sessionStatus,
     );
 
-    expect(messageRepository.sessionStatus, const PluginSessionStatus.busy());
+    expect(
+      messageRepository.replayToolDisposition,
+      CodexReplayToolDisposition.preserveRunning,
+    );
   });
 }
 
@@ -409,7 +442,7 @@ class _RecordingMessageRepository extends CodexMessageRepository {
       );
 
   Map<String, PluginToolStatus>? statuses;
-  PluginSessionStatus? sessionStatus;
+  CodexReplayToolDisposition? replayToolDisposition;
   int prepareCount = 0;
 
   @override
@@ -425,12 +458,12 @@ class _RecordingMessageRepository extends CodexMessageRepository {
   List<PluginMessageWithParts> projectMessages({
     required CodexPreparedMessageRead read,
     required String sessionId,
-    required PluginSessionStatus sessionStatus,
+    required CodexReplayToolDisposition replayToolDisposition,
     required Map<String, PluginToolStatus> structuredToolStatusByCallId,
     CodexConfigDefaults config = const CodexConfigDefaults.empty(),
   }) {
     statuses = structuredToolStatusByCallId;
-    this.sessionStatus = sessionStatus;
+    this.replayToolDisposition = replayToolDisposition;
     return const [];
   }
 }

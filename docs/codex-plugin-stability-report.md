@@ -13,7 +13,7 @@
   The separately reproduced F-12 generated-instructions defect remains open and
   is scheduled for Step 10 of the delivery plan.
 
-The final local stack, in order, is:
+The final production stack, in order, is:
 
 1. `c3ab5fcb` `fix(codex): recognize directed image wrappers`
 2. `58585e1f` `fix(codex): unify code-mode command identity`
@@ -22,6 +22,7 @@ The final local stack, in order, is:
 5. `9da8f2e1` `fix(codex): unify file change identity`
 6. `8f0f4ece` `fix(codex): settle interrupted tools after restart`
 7. `cdd3a305` `fix(codex): preserve locally archived history`
+8. `d4e30b87` `refactor(codex): type replay and item boundaries`
 
 The first six deep-test steps subsequently merged through PRs
 [#724](https://github.com/sesori-ai/sesori_apps_monorepo/pull/724),
@@ -200,7 +201,8 @@ summaries and only the identifiers needed to correlate a finding.
   code-mode commands, and the wrapper patch was not projected as an edit.
 - **Fix:** Deep-test commit `9da8f2e1` recognizes the exact single-patch wrapper,
   correlates app-server file changes to its canonical rollout ID, and preserves
-  the patch as edit output.
+  the patch as edit output. Follow-up `d4e30b87` parses file-change lifecycle
+  data into a sealed typed event before coordination and repository tracking.
 - **Result:** A fresh create/update/delete sequence produced exactly three edit
   cards with stable IDs, titles, patches, and completed status after restart.
 
@@ -214,7 +216,9 @@ summaries and only the identifiers needed to correlate a finding.
   evidence. History reconstruction did not receive authoritative session status.
 - **Fix:** Deep-test commit `8f0f4ece` introduced idle-gated replay
   terminalization. PR #743 refined the activity snapshot and interrupted-image
-  handling before merge.
+  handling before merge. Follow-up `d4e30b87` keeps the policy in
+  `CodexSessionService`, which maps session status to an explicit
+  preserve-or-terminalize replay disposition.
 - **Result:** The interrupted call replays as `Failed`. A separate live
   30-second call remained `Running` during active snapshots and completed
   normally, proving active work is not closed prematurely.
@@ -253,12 +257,14 @@ summaries and only the identifiers needed to correlate a finding.
 
 ## Automated Verification
 
-- `dart test` in `bridge/sesori_plugin_codex`: 311 tests passed after the first
-  six delivery PRs were merged forward into the archive fix.
+- `dart test` in `bridge/sesori_plugin_codex`: 315 tests passed after the typed
+  boundary changes were merged forward over the first seven delivery steps.
 - `dart analyze --fatal-infos` in `bridge/sesori_plugin_codex`: no issues.
 - Targeted tests cover generated image wrappers, canonical shell and file-change
   identity, late abort completion, active-versus-idle rollout replay, and
   local-only archive behavior.
+- Architecture review approved the eight production commits after typed
+  app-server event parsing and service-owned replay policy were verified.
 - `git diff --check` is part of final report validation.
 
 ## Residual Observations
@@ -298,4 +304,5 @@ and deletion all converged across bridge snapshots and the iOS UI.
 
 The empty upstream reasoning summaries and one non-reproduced shutdown stall are
 documented residual coverage limits, not demonstrated release blockers. The
-deep-test fixes are being reviewed and merged in their original stack order.
+eight deep-test production commits are being reviewed and merged in their
+original stack order.

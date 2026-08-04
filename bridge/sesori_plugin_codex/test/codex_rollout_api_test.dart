@@ -4,6 +4,7 @@ import "dart:io";
 
 import "package:codex_plugin/codex_plugin.dart";
 import "package:codex_plugin/src/api/models/codex_rollout_dto.dart";
+import "package:codex_plugin/src/models/codex_replay_tool_disposition.dart";
 import "package:codex_plugin/src/repositories/codex_catalog_repository.dart";
 import "package:codex_plugin/src/repositories/codex_message_repository.dart";
 import "package:codex_plugin/src/repositories/mappers/codex_image_attachment_mapper.dart";
@@ -946,7 +947,7 @@ void main() {
       final messages = messageRepository.readMessages(
         rolloutPath: path,
         sessionId: "019a0000-1111-2222-3333-aaaaaaaaaaaa",
-        sessionStatus: const PluginSessionStatus.idle(),
+        replayToolDisposition: CodexReplayToolDisposition.terminalize,
         structuredToolStatusByCallId: const {},
       );
       expect(messages, hasLength(2));
@@ -1086,7 +1087,7 @@ void main() {
       final messages = messageRepository.readMessages(
         rolloutPath: path,
         sessionId: "019a0000-1111-2222-3333-ccccccccccc1",
-        sessionStatus: const PluginSessionStatus.idle(),
+        replayToolDisposition: CodexReplayToolDisposition.terminalize,
         structuredToolStatusByCallId: const {},
       );
 
@@ -1132,7 +1133,7 @@ void main() {
       final messages = messageRepository.readMessages(
         rolloutPath: path,
         sessionId: "019a0000-1111-2222-3333-cccccccccccc",
-        sessionStatus: const PluginSessionStatus.idle(),
+        replayToolDisposition: CodexReplayToolDisposition.terminalize,
         structuredToolStatusByCallId: const {},
       );
 
@@ -1180,13 +1181,13 @@ void main() {
       final firstRead = messageRepository.readMessages(
         rolloutPath: path,
         sessionId: "019a0000-1111-2222-3333-iiiiiiiiiiii",
-        sessionStatus: const PluginSessionStatus.idle(),
+        replayToolDisposition: CodexReplayToolDisposition.terminalize,
         structuredToolStatusByCallId: const {},
       );
       final secondRead = messageRepository.readMessages(
         rolloutPath: path,
         sessionId: "019a0000-1111-2222-3333-iiiiiiiiiiii",
-        sessionStatus: const PluginSessionStatus.idle(),
+        replayToolDisposition: CodexReplayToolDisposition.terminalize,
         structuredToolStatusByCallId: const {},
       );
 
@@ -1243,13 +1244,13 @@ void main() {
       final busyMessages = messageRepository.readMessages(
         rolloutPath: path,
         sessionId: "019a0000-1111-2222-3333-iiiiiiiiii99",
-        sessionStatus: const PluginSessionStatus.busy(),
+        replayToolDisposition: CodexReplayToolDisposition.preserveRunning,
         structuredToolStatusByCallId: const {},
       );
       final idleMessages = messageRepository.readMessages(
         rolloutPath: path,
         sessionId: "019a0000-1111-2222-3333-iiiiiiiiii99",
-        sessionStatus: const PluginSessionStatus.idle(),
+        replayToolDisposition: CodexReplayToolDisposition.terminalize,
         structuredToolStatusByCallId: const {},
       );
 
@@ -1300,7 +1301,7 @@ void main() {
       final messages = messageRepository.readMessages(
         rolloutPath: path,
         sessionId: "019a0000-1111-2222-3333-iiiiiiiiiii2",
-        sessionStatus: const PluginSessionStatus.idle(),
+        replayToolDisposition: CodexReplayToolDisposition.terminalize,
         structuredToolStatusByCallId: const {},
       );
 
@@ -1346,7 +1347,7 @@ void main() {
       final messages = messageRepository.readMessages(
         rolloutPath: path,
         sessionId: "019a0000-1111-2222-3333-iiiiiiiiiii3",
-        sessionStatus: const PluginSessionStatus.idle(),
+        replayToolDisposition: CodexReplayToolDisposition.terminalize,
         structuredToolStatusByCallId: const {},
       );
 
@@ -1386,7 +1387,7 @@ void main() {
       final messages = messageRepository.readMessages(
         rolloutPath: path,
         sessionId: "019a0000-1111-2222-3333-iiiiiiiiiii4",
-        sessionStatus: const PluginSessionStatus.idle(),
+        replayToolDisposition: CodexReplayToolDisposition.terminalize,
         structuredToolStatusByCallId: const {},
       );
 
@@ -1402,7 +1403,7 @@ void main() {
         () => messageRepository.readMessages(
           rolloutPath: path,
           sessionId: sessionId,
-          sessionStatus: const PluginSessionStatus.idle(),
+          replayToolDisposition: CodexReplayToolDisposition.terminalize,
           structuredToolStatusByCallId: const {},
         ),
         throwsA(
@@ -1470,7 +1471,7 @@ void main() {
       final messages = messageRepository.readMessages(
         rolloutPath: path,
         sessionId: "019a0000-1111-2222-3333-bbbbbbbbbbbb",
-        sessionStatus: const PluginSessionStatus.idle(),
+        replayToolDisposition: CodexReplayToolDisposition.terminalize,
         structuredToolStatusByCallId: const {
           "c2": PluginToolStatus.error,
         },
@@ -1702,13 +1703,13 @@ void main() {
       final messages = messageRepository.readMessages(
         rolloutPath: path,
         sessionId: "019a0000-1111-2222-3333-ccccccccccc2",
-        sessionStatus: const PluginSessionStatus.busy(),
+        replayToolDisposition: CodexReplayToolDisposition.preserveRunning,
         structuredToolStatusByCallId: const {},
       );
       final idleMessages = messageRepository.readMessages(
         rolloutPath: path,
         sessionId: "019a0000-1111-2222-3333-ccccccccccc2",
-        sessionStatus: const PluginSessionStatus.idle(),
+        replayToolDisposition: CodexReplayToolDisposition.terminalize,
         structuredToolStatusByCallId: const {},
       );
 
@@ -1817,7 +1818,7 @@ void main() {
         messages = messageRepository.readMessages(
           rolloutPath: path,
           sessionId: "019a0000-1111-2222-3333-bbbbbbbbbbbb",
-          sessionStatus: const PluginSessionStatus.idle(),
+          replayToolDisposition: CodexReplayToolDisposition.terminalize,
           structuredToolStatusByCallId: const {},
         );
       }, level: LogLevel.verbose);
@@ -1877,7 +1878,7 @@ void main() {
           .readMessages(
             rolloutPath: path,
             sessionId: "019a0000-1111-2222-3333-cccccccccccc",
-            sessionStatus: const PluginSessionStatus.idle(),
+            replayToolDisposition: CodexReplayToolDisposition.terminalize,
             structuredToolStatusByCallId: const {},
           )
           .single
@@ -2136,7 +2137,7 @@ void main() {
       final messages = repository.readMessages(
         rolloutPath: path,
         sessionId: "019a0000-1111-2222-3333-dddddddddddd",
-        sessionStatus: const PluginSessionStatus.idle(),
+        replayToolDisposition: CodexReplayToolDisposition.terminalize,
         structuredToolStatusByCallId: const {},
       );
       expect(messages, hasLength(2));
@@ -2179,7 +2180,7 @@ void main() {
       final messages = repository.readMessages(
         rolloutPath: path,
         sessionId: "019a0000-1111-2222-3333-eeeeeeeeeeee",
-        sessionStatus: const PluginSessionStatus.idle(),
+        replayToolDisposition: CodexReplayToolDisposition.terminalize,
         structuredToolStatusByCallId: const {},
         config: const CodexConfigDefaults(
           model: "gpt-5.5",
