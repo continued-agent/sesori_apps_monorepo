@@ -845,6 +845,11 @@ class OrchestratorSession {
   Future<void> get firstPhoneConnected => _firstPhoneConnectedCompleter.future;
   RoutedRequestDispatcher get routedRequestDispatcher => _routedRequestDispatcher;
 
+  /// Completes when [beginShutdown] starts the graceful shutdown, so the
+  /// composition root can start the ordered shutdown coordinator (agent-work
+  /// interrupt, backstop deadline) the moment the session begins tearing down.
+  Future<void> get shutdownRequested => _shutdownCompleter.future;
+
   Future<OrchestratorSessionStartResult> start() {
     if (_lifecycleFuture != null) {
       return Future.error(StateError("OrchestratorSession has already started"), StackTrace.current);
