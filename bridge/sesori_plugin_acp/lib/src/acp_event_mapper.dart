@@ -180,6 +180,16 @@ class AcpEventMapper {
   /// characters in the opaque agent-supplied ids.
   final Map<String, Map<String, _LiveTool>> _liveTools = {};
 
+  /// Resolves the live session that owns [toolCallId], when a harness extension
+  /// omits `sessionId` but carries the originating tool call id.
+  String? sessionIdForToolCallId({required String? toolCallId}) {
+    if (toolCallId == null || toolCallId.isEmpty) return null;
+    for (final entry in _liveTools.entries) {
+      if (entry.value.containsKey(toolCallId)) return entry.key;
+    }
+    return null;
+  }
+
   /// sessionId -> current turn number, advanced by [beginTurn].
   final Map<String, int> _turnSeq = {};
 
@@ -422,6 +432,49 @@ class AcpEventMapper {
       content: update["content"],
       scope: tracker.mappingScope,
     );
+    return _appendAssistantBlocks(
+      sessionId: sessionId,
+      identity: identity,
+      tracker: tracker,
+      blocks: blocks,
+    );
+  }
+
+  /// Appends assistant image blocks normalized locally on the bridge (a harness
+  /// extension that surfaces images outside standard ACP chunks) into the same
+  /// ordered message state used by `agent_message_chunk`. The image-typed
+  /// parameter also guarantees structurally that this path can never trip the
+  /// text-only halt-notice classification in [_appendAssistantBlocks].
+  List<BridgeSseEvent> appendAssistantImageBlocks({
+    required String sessionId,
+    required String? messageId,
+    required Iterable<AcpMappedImageContentBlock> blocks,
+  }) {
+    final identity = _chunkIdentity(
+      sessionId: sessionId,
+      update: messageId == null
+          ? const <String, dynamic>{}
+          : <String, dynamic>{"messageId": messageId},
+      role: _ChunkRole.assistant,
+    );
+    final tracker = (_contentTrackers[sessionId] ??= {}).putIfAbsent(
+      identity.messageId,
+      AcpContentTracker.new,
+    );
+    return _appendAssistantBlocks(
+      sessionId: sessionId,
+      identity: identity,
+      tracker: tracker,
+      blocks: blocks,
+    );
+  }
+
+  List<BridgeSseEvent> _appendAssistantBlocks({
+    required String sessionId,
+    required ({String messageId, bool hasAcpMessageId}) identity,
+    required AcpContentTracker tracker,
+    required Iterable<AcpMappedContentBlock> blocks,
+  }) {
     if (blocks.isEmpty) return const [];
     final hasTrackableContent = blocks.any(
       (block) => block is AcpMappedImageContentBlock || (block is AcpMappedTextContentBlock && block.text.isNotEmpty),
