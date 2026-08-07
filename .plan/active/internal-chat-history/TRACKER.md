@@ -3,20 +3,19 @@
 ## Current State
 
 - **Plan slug:** `internal-chat-history`
-- **Implementation base:** `origin/main` at `232974e1`
-- **Series state:** Step 1/8 plan PR open
-- **Current step:** 1/8
-- **Plan PR:** [#763](https://github.com/sesori-ai/sesori_apps_monorepo/pull/763)
-- **Prerequisite:** the `read-only-archiving` series must merge fully before
-  step 2/8 starts.
-- **Next action:** merge PR #763; implement the `read-only-archiving` series;
-  then start step 2/8.
+- **Implementation base:** `origin/main` at `b710f0df`
+- **Series state:** Step 1/8 merged; implementation not started
+- **Current step:** 2/8
+- **Plan PR:** [#763](https://github.com/sesori-ai/sesori_apps_monorepo/pull/763) merged
+- **Prerequisite:** satisfied — the `read-only-archiving` series merged fully on
+  2026-08-07 (through [PR #770](https://github.com/sesori-ai/sesori_apps_monorepo/pull/770)).
+- **Next action:** start step 2/8.
 
 ## Delivery Steps
 
 | Done | Step | Exact PR title | Estimate | State |
 |---|---|---|---:|---|
-| [ ] | 1/8 | `🌱 [internal-chat-history] Raise plan [step 1/8]` | 400–700 | [PR #763](https://github.com/sesori-ai/sesori_apps_monorepo/pull/763) open |
+| [x] | 1/8 | `🌱 [internal-chat-history] Raise plan [step 1/8]` | 400–700 | [PR #763](https://github.com/sesori-ai/sesori_apps_monorepo/pull/763) merged |
 | [ ] | 2/8 | `🚧 [internal-chat-history] Introduce the chat history database [step 2/8]` | 1,500–2,600 | pending |
 | [ ] | 3/8 | `🚧 [internal-chat-history] Capture live message events and backfill lazily [step 3/8]` | 900–1,400 | pending |
 | [ ] | 4/8 | `⚙️ [internal-chat-history] Serve session messages from the store [step 4/8]` | 700–1,100 | pending |
@@ -29,8 +28,7 @@
 
 - Merge in numeric order; each PR must remain independently valid at its own
   base. A successor may target its open predecessor.
-- Do not start step 2/8 until the `read-only-archiving` series has fully
-  merged.
+- The `read-only-archiving` prerequisite has merged, so step 2/8 is unblocked.
 - Count additions plus deletions (including generated code and tests) against
   the 1,500-line soft cap; the step 2 overage from new-database codegen is
   pre-recorded in `PLAN.md`.
