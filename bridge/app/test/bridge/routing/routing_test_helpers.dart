@@ -764,7 +764,10 @@ class _NoopPullRequestRepository implements PullRequestRepository {
   }) async => const <String>{};
 }
 
-Session _deletedSession(String sessionId) => Session(
+DeletedSessionSubtree _deletedSession(String sessionId) =>
+    (session: _deletedSessionInfo(sessionId), sessionIds: [sessionId]);
+
+Session _deletedSessionInfo(String sessionId) => Session(
   branchName: null,
   id: sessionId,
   pluginId: "fake",
@@ -838,7 +841,7 @@ class _NoopSessionRepository implements SessionRepository {
   Future<bool> setSessionTitleIfStored({required String sessionId, required String? title}) async => true;
 
   @override
-  Future<Session> deleteSession({required String sessionId}) async => _deletedSession(sessionId);
+  Future<DeletedSessionSubtree> deleteSession({required String sessionId}) async => _deletedSession(sessionId);
 
   @override
   Future<bool> isSessionTombstoned({required String sessionId}) async => false;
@@ -910,6 +913,8 @@ class _NoopSessionRepository implements SessionRepository {
   }) async => sessions;
   @override
   Future<List<Session>> getChildSessions({required String sessionId}) async => const <Session>[];
+  @override
+  Future<List<String>> getSessionSubtreeIds({required String sessionId}) async => [sessionId];
   @override
   Future<List<StoredSession>> getStoredSessionsByProjectId({required String projectId}) async =>
       const <StoredSession>[];
@@ -1118,7 +1123,7 @@ class FakeSessionRepository implements SessionRepository {
   }
 
   @override
-  Future<Session> deleteSession({required String sessionId}) async => _deletedSession(sessionId);
+  Future<DeletedSessionSubtree> deleteSession({required String sessionId}) async => _deletedSession(sessionId);
 
   @override
   Future<bool> isSessionTombstoned({required String sessionId}) async => false;
@@ -1328,6 +1333,12 @@ class FakeSessionRepository implements SessionRepository {
   Future<List<Session>> getChildSessions({required String sessionId}) async {
     final pluginSessions = await _plugin.getChildSessions(sessionId);
     return pluginSessions.map((s) => s.toSharedSession(pluginId: _plugin.id)).toList();
+  }
+
+  @override
+  Future<List<String>> getSessionSubtreeIds({required String sessionId}) async {
+    final stored = await _sessionDao.getSession(sessionId: sessionId);
+    return stored == null ? const [] : [sessionId];
   }
 
   @override
