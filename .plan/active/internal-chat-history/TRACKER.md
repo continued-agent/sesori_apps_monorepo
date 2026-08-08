@@ -51,7 +51,6 @@
   `chat_history_capture_test.dart`.
 
 ## Findings And Plan Deltas
-
 - **2026-08-06 — Plan revised after comparison with PR #764** (parallel
   draft, superseded): adopted watermark staleness, additive pagination
   fields, in-JSON stored-file attachment references with content-addressed
@@ -71,8 +70,29 @@
   exists, so the catalog-import input (and the `observeBackendActivity`
   surface it needs) moves to step 4/8, where the staleness comparison it feeds
   is introduced. Success Criterion 3 is therefore verified in step 4, not 3.
+- **2026-08-07 — Second watermark source wired in step 4/8** as deferred
+  below: `CatalogImportRepository` publishes a `backendActivity` stream as it
+  commits an import, and `ChatHistoryActivityListener` feeds it into the
+  store's staleness marks. Success Criterion 3 is verified here.
 - **2026-08-07 — Backfill atomicity tightened.** The plan says a backfill
   atomically replaces rows and sets the watermark; the first implementation
   split the row replace and the sync-state write into two statements. They now
   share one transaction, so a crash cannot leave a replaced transcript
   described by the previous run's freshness marks.
+- **2026-08-08 — Corrected the activity producer.** The first step-4 draft
+  published from `SessionRepository`'s active-root hydration path, which only
+  runs when an active session has no bridge binding — so for a normally
+  imported catalog nothing was ever published and Criterion 3 was unmet
+  despite being claimed. The producer now lives in the import commit, uses the
+  backend's own reported `updated` time (never the merged `updatedAt`, which a
+  rename moves), and is pinned by a test. Found by architecture review.
+- **2026-08-08 — Harness startup constraints recorded** in `PLAN.md` per user
+  direction: harnesses respond poorly right after starting, so nothing in this
+  feature may fetch on a lifecycle event or batch requests at startup, and
+  "reading history never starts a harness" is now stated as a primary goal in
+  Success Criterion 1 rather than left implicit.
+- **2026-08-08 — No fallback for a missing backend update time.** Review asked
+  for one when a plugin omits `time.updated`. Both candidates are worse than
+  the gap: the merged catalog `updatedAt` is moved by renames, and the import
+  clock would mark every such session stale on every import and wake its
+  harness. Recorded in `PLAN.md` § Known Limits instead.
