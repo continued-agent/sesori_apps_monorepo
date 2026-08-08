@@ -249,85 +249,91 @@ void main() {
       }
     });
 
-    test("replacing an audit file keeps the old one until the new one lands", () async {
-      await export();
-      final original = await history.archivedStorage.read(sessionId: "ses_a");
-
-      // A second write must leave exactly one audit file, with the new
-      // contents — no displaced leftovers, and never a moment with none.
-      await history.archivedStorage.write(sessionId: "ses_a", contents: original!);
-
-      final archiveDirectory = Directory(archiveDirectoryPath(dataDirectory: history.directory.path));
-      final files = archiveDirectory.listSync().whereType<File>().toList();
-      expect(files, hasLength(1));
-      expect(await history.archivedStorage.read(sessionId: "ses_a"), original);
-    });
-
     test("malformed audit bytes are quarantined instead of failing the read", () async {
       await export();
       await history.service.purgeSessionHistory(sessionId: "ses_a");
       // Invalid UTF-8, not merely invalid JSON.
-      File(
-        "${archiveDirectoryPath(dataDirectory: history.directory.path)}/"
-        "${base64Url.encode(utf8.encode("ses_a"))}.json",
-      ).writeAsBytesSync([0xC3, 0x28, 0xA0, 0xA1]);
+      final archiveDirectory = Directory(archiveDirectoryPath(dataDirectory: history.directory.path));
+      for (final file in archiveDirectory.listSync().whereType<File>()) {
+        file.writeAsBytesSync([0xC3, 0x28, 0xA0, 0xA1]);
+      }
 
       expect(await history.service.getArchivedSessionMessages(sessionId: "ses_a"), isNull);
 
-      final quarantined = Directory(archiveDirectoryPath(dataDirectory: history.directory.path))
-          .listSync()
-          .whereType<File>()
-          .where((file) => file.path.contains(".corrupt-"));
+      final quarantined = archiveDirectory.listSync().whereType<File>().where(
+        (file) => file.path.contains(".corrupt-"),
+      );
       expect(quarantined, hasLength(1));
     });
 
-    test("a transcript displaced by an interrupted replacement is recovered", () async {
+    test("an interrupted write leaves the previous transcript readable", () async {
       await export();
       final original = await history.archivedStorage.read(sessionId: "ses_a");
-      final canonical = File(
-        "${archiveDirectoryPath(dataDirectory: history.directory.path)}/"
-        "${base64Url.encode(utf8.encode("ses_a"))}.json",
-      );
-      // Simulate a crash between the two renames: only the displaced copy is
-      // on disk, and the canonical path is missing.
-      canonical.renameSync("${canonical.path}.previous");
-      expect(canonical.existsSync(), isFalse);
+      // A newer generation that never finished writing: present, but not
+      // valid content.
+      final archiveDirectory = Directory(archiveDirectoryPath(dataDirectory: history.directory.path));
+      File(
+        "${archiveDirectory.path}/${base64Url.encode(utf8.encode("ses_a"))}.99.json",
+      ).writeAsBytesSync([0xC3, 0x28, 0xA0, 0xA1]);
 
-      expect(await history.archivedStorage.read(sessionId: "ses_a"), original);
-      expect(await history.archivedStorage.exists(sessionId: "ses_a"), isTrue);
       expect(
-        await history.archivedStorage.listArchivedSessionIds(),
-        contains("ses_a"),
-        reason: "reconcile must still see the session as archived",
+        await history.archivedStorage.read(sessionId: "ses_a"),
+        original,
+        reason: "a half-written newer generation must not cost the previous transcript",
+      );
+      expect(await history.archivedStorage.exists(sessionId: "ses_a"), isTrue);
+    });
+
+    test("a decode failure on the newest generation keeps the older one", () async {
+      await export();
+      final original = await history.archivedStorage.read(sessionId: "ses_a");
+      // Valid UTF-8 but not a valid envelope: the repository decodes it, fails,
+      // and quarantines. The older generation must survive as the fallback.
+      final archiveDirectory = Directory(archiveDirectoryPath(dataDirectory: history.directory.path));
+      File(
+        "${archiveDirectory.path}/${base64Url.encode(utf8.encode("ses_a"))}.99.json",
+      ).writeAsStringSync("{ not an envelope");
+
+      // First read quarantines the bad newest generation.
+      await history.service.getArchivedSessionMessages(sessionId: "ses_a");
+
+      expect(
+        await history.archivedStorage.read(sessionId: "ses_a"),
+        original,
+        reason: "quarantining the unreadable newest must not take the last good archive with it",
       );
     });
 
-    test("a stale displaced copy never blocks a later write", () async {
+    test("an interrupted first write leaves no partial generation", () async {
+      // Nothing under a generation name is ever partial: writes land through a
+      // temp file, so a crash leaves a .tmp that no reader matches.
+      final archiveDirectory = Directory(archiveDirectoryPath(dataDirectory: history.directory.path));
+      await archiveDirectory.create(recursive: true);
+      File(
+        "${archiveDirectory.path}/${base64Url.encode(utf8.encode("ses_b"))}.1.json.1234.5678.tmp",
+      ).writeAsStringSync("{ partial");
+
+      expect(await history.archivedStorage.exists(sessionId: "ses_b"), isFalse);
+      expect(await history.archivedStorage.read(sessionId: "ses_b"), isNull);
+      expect(await history.archivedStorage.listArchivedSessionIds(), isNot(contains("ses_b")));
+    });
+
+    test("writing again supersedes the previous generation", () async {
       await export();
-      final canonical = File(
-        "${archiveDirectoryPath(dataDirectory: history.directory.path)}/"
-        "${base64Url.encode(utf8.encode("ses_a"))}.json",
-      );
-      // A crash left a displaced copy behind while the canonical file exists.
-      canonical.copySync("${canonical.path}.previous");
 
       await history.archivedStorage.write(sessionId: "ses_a", contents: '{"schemaVersion":1}');
 
-      expect(
-        File("${canonical.path}.previous").existsSync(),
-        isFalse,
-        reason: "a stale displaced slot must be cleared, or the next write cannot rename aside",
-      );
+      final archiveDirectory = Directory(archiveDirectoryPath(dataDirectory: history.directory.path));
+      final files = archiveDirectory.listSync().whereType<File>().toList();
+      expect(files, hasLength(1), reason: "superseded generations are removed");
       expect(await history.archivedStorage.read(sessionId: "ses_a"), contains("schemaVersion"));
     });
 
-    test("deleting a session leaves no displaced copy behind", () async {
+    test("deleting a session removes every generation", () async {
       await export();
-      final canonical = File(
-        "${archiveDirectoryPath(dataDirectory: history.directory.path)}/"
-        "${base64Url.encode(utf8.encode("ses_a"))}.json",
-      );
-      canonical.copySync("${canonical.path}.previous");
+      // A leftover older generation, as an interrupted cleanup would leave.
+      final archiveDirectory = Directory(archiveDirectoryPath(dataDirectory: history.directory.path));
+      File("${archiveDirectory.path}/${base64Url.encode(utf8.encode("ses_a"))}.1.json").writeAsStringSync("{}");
 
       await history.service.purgeSessionHistory(sessionId: "ses_a", includeArchive: true);
 
