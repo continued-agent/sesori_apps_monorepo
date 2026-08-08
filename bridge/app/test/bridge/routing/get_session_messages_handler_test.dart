@@ -36,11 +36,26 @@ void main() {
       expect(handler.canHandle(makeRequest("GET", "/session")), isFalse);
     });
 
+    test("returns 400 for a non-positive limit", () async {
+      for (final limit in const [0, -1]) {
+        await expectLater(
+          () => handler.handle(
+            makeRequest("POST", "/session/messages"),
+            body: SessionMessagesRequest(sessionId: "session-1", limit: limit, before: null),
+            pathParams: const {},
+            queryParams: const {},
+            fragment: null,
+          ),
+          throwsA(isA<RelayResponse>().having((response) => response.status, "status", 400)),
+        );
+      }
+    });
+
     test("returns 400 when session id is empty", () async {
       await expectLater(
         () => handler.handle(
           makeRequest("POST", "/session/messages"),
-          body: const SessionIdRequest(sessionId: ""),
+          body: const SessionMessagesRequest(sessionId: "", limit: null, before: null),
           pathParams: {},
           queryParams: {},
           fragment: null,
@@ -52,7 +67,7 @@ void main() {
     test("uses request body sessionId as the session ID passed to plugin", () async {
       await handler.handle(
         makeRequest("POST", "/session/messages"),
-        body: const SessionIdRequest(sessionId: "session-xyz"),
+        body: const SessionMessagesRequest(sessionId: "session-xyz", limit: null, before: null),
         pathParams: {},
         queryParams: {},
         fragment: null,
@@ -63,7 +78,7 @@ void main() {
     test("returns typed response", () async {
       final response = await handler.handle(
         makeRequest("POST", "/session/messages"),
-        body: const SessionIdRequest(sessionId: "s1"),
+        body: const SessionMessagesRequest(sessionId: "s1", limit: null, before: null),
         pathParams: {},
         queryParams: {},
         fragment: null,
@@ -74,7 +89,7 @@ void main() {
     test("returns empty list when plugin has no messages", () async {
       final response = await handler.handle(
         makeRequest("POST", "/session/messages"),
-        body: const SessionIdRequest(sessionId: "s1"),
+        body: const SessionMessagesRequest(sessionId: "s1", limit: null, before: null),
         pathParams: {},
         queryParams: {},
         fragment: null,
@@ -108,7 +123,7 @@ void main() {
 
       final response = await handler.handle(
         makeRequest("POST", "/session/messages"),
-        body: const SessionIdRequest(sessionId: "s1"),
+        body: const SessionMessagesRequest(sessionId: "s1", limit: null, before: null),
         pathParams: {},
         queryParams: {},
         fragment: null,
@@ -124,7 +139,7 @@ void main() {
         makeRequest(
           "POST",
           "/session/messages",
-          body: jsonEncode(const SessionIdRequest(sessionId: "s1").toJson()),
+          body: jsonEncode(const SessionMessagesRequest(sessionId: "s1", limit: null, before: null).toJson()),
         ),
         pathParams: {},
         queryParams: {},
