@@ -3,13 +3,13 @@
 ## Current State
 
 - **Plan slug:** `internal-chat-history`
-- **Implementation base:** `origin/main` at `4a50b6a9`
-- **Series state:** Steps 1–4 merged; step 5/8 in PR
-- **Current step:** 5/8
+- **Implementation base:** `origin/main` at `dd6fd2f8`
+- **Series state:** Steps 1–6 merged; step 7/9 in PR
+- **Current step:** 7/9
 - **Plan PR:** [#763](https://github.com/sesori-ai/sesori_apps_monorepo/pull/763) merged
 - **Prerequisite:** satisfied — the `read-only-archiving` series merged fully on
   2026-08-07 (through [PR #771](https://github.com/sesori-ai/sesori_apps_monorepo/pull/771)).
-- **Next action:** merge step 5/8, then start step 6/8 (archive export and purge).
+- **Next action:** merge step 7/9, then start step 8/9 (stop waking a harness for pending state).
 
 ## Delivery Steps
 
@@ -19,10 +19,11 @@
 | [x] | 2/8 | `🚧 [internal-chat-history] Introduce the chat history database [step 2/8]` | 1,500–2,600 | [PR #768](https://github.com/sesori-ai/sesori_apps_monorepo/pull/768) merged |
 | [x] | 3/8 | `🚧 [internal-chat-history] Capture live message events and backfill lazily [step 3/8]` | 900–1,400 | [PR #776](https://github.com/sesori-ai/sesori_apps_monorepo/pull/776) merged |
 | [x] | 4/8 | `⚙️ [internal-chat-history] Serve session messages from the store [step 4/8]` | 700–1,100 | [PR #781](https://github.com/sesori-ai/sesori_apps_monorepo/pull/781) merged |
-| [ ] | 5/8 | `⚙️ [internal-chat-history] Paginate session messages [step 5/8]` | 600–1,000 | in progress |
-| [ ] | 6/8 | `🚧 [internal-chat-history] Export archives and purge history on archive [step 6/8]` | 1,000–1,500 | pending |
-| [ ] | 7/8 | `🌿 [internal-chat-history] Load history pages on demand in the client [step 7/8]` | 500–900 | pending |
-| [ ] | 8/8 | `🌱 [internal-chat-history] Retire plan and scope the harness-free session open [step 8/8]` | 150–400 | pending |
+| [x] | 5/8 | `⚙️ [internal-chat-history] Paginate session messages [step 5/8]` | 600–1,000 | [PR #783](https://github.com/sesori-ai/sesori_apps_monorepo/pull/783) merged |
+| [x] | 6/8 | `🚧 [internal-chat-history] Export archives and purge history on archive [step 6/8]` | 1,000–1,500 | [PR #785](https://github.com/sesori-ai/sesori_apps_monorepo/pull/785) merged |
+| [ ] | 7/9 | `🌿 [internal-chat-history] Load history pages on demand in the client [step 7/9]` | 500–900 | in progress |
+| [ ] | 8/9 | `⚙️ [internal-chat-history] Stop waking a harness for pending questions and permissions [step 8/9]` | 300–600 | pending |
+| [ ] | 9/9 | `🌱 [internal-chat-history] Retire plan and scope the remaining harness-free work [step 9/9]` | 150–400 | pending |
 
 ## Execution Rules
 
@@ -42,7 +43,6 @@
   tests in step 5.
 
 ## Verification Log
-
 - **2026-08-07 — step 2/8:** `dart analyze --fatal-infos` clean in `bridge/app`;
   `dart test` in `bridge/app` green (2,440 tests), including the new
   `chat_history_purge_test.dart`.
@@ -53,6 +53,9 @@
 - **2026-08-08 — step 5/8:** analyzer clean in `bridge/app`, `sesori_shared`,
   `client/module_core`, and `client/app`; `bridge/app` 2,493 tests,
   `sesori_shared` 364, `client/module_core` 1,006, `client/app` 915.
+- **2026-08-08 — step 6/8:** analyzer clean; `bridge/app` green (2,516 tests).
+- **2026-08-08 — step 7/9:** analyzer clean in `client/module_core` and
+  `client/app`; `module_core` 1,029 tests, `client/app` 922.
 
 ## Findings And Plan Deltas
 - **2026-08-06 — Plan revised after comparison with PR #764** (parallel
@@ -109,3 +112,26 @@
   now retires the plan *and* produces an aligned written assessment of the
   remaining plugin-starting calls; implementation stays out of this series.
   Recorded per user direction after observing it on a live bridge.
+- **2026-08-08 — Series extended to nine steps.** A new step 8/9 moves
+  `getPendingQuestions`/`getPendingPermissions` to `useIfActive`, and plan
+  retirement becomes step 9/9. Rationale, confirmed against the plugins: a
+  stopped harness holds no pending state — ACP keeps it in an in-memory
+  approval registry that starts empty, and OpenCode serves it from its running
+  HTTP server — so starting a backend to ask can only ever return none after
+  paying the full start cost. Steps 1–6 keep their merged `/8` titles because
+  history is not rewritten. Requested by the user after observing that session
+  open still felt unchanged on a bridge running step 4.
+- **2026-08-08 — Non-auto-starting backends added to the step 9/9 questions.**
+  A backend configured never to auto-start makes "start it to find out"
+  unavailable rather than merely slow, so it is the sharpest test of what each
+  snapshot call should do when the harness is stopped. To be discussed with the
+  user after the plan completes.
+- **2026-08-08 — Archive storage refactored between steps 6 and 7.** Four
+  review rounds on PR #785 landed on the same seam: replacing an audit file in
+  place needs a scratch slot, and a fixed-name slot has states that must be
+  reconciled everywhere. Filenames now carry a generation
+  (`<session>.<generation>.json`) and are never replaced, which removed the
+  Windows rename fallback, the displaced slot, and its recovery logic
+  ([PR #786](https://github.com/sesori-ai/sesori_apps_monorepo/pull/786)).
+  Raised separately from the series because it changed code step 6 had already
+  shipped.

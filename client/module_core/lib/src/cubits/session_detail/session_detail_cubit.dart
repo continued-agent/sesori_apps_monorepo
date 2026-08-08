@@ -48,6 +48,11 @@ enum _SessionRefreshResult { applied, failed, waitingForConnection, staleConnect
 
 class SessionDetailCubit extends Cubit<SessionDetailState> {
   final SessionDetailLoadService _loadService;
+
+  /// Bumped whenever the transcript is replaced wholesale (a refresh or
+  /// reload), so an older-page request that started before it can tell its
+  /// result no longer joins onto what is shown.
+  int _transcriptGeneration = 0;
   final SessionRepository _sessionRepository;
   final ConnectionService _connectionService;
   final PermissionRepository _permissionRepository;
@@ -250,6 +255,54 @@ class SessionDetailCubit extends Cubit<SessionDetailState> {
 
   Future<void> reload() async {
     await _loadMessages(isReload: true);
+  }
+
+  /// Loads the page of messages before the ones currently shown.
+  ///
+  /// A no-op when the start of the transcript is already loaded or a request
+  /// is already running, so repeated scroll-to-top gestures cannot stack.
+  Future<void> loadOlderMessages() async {
+    final current = state;
+    if (current is! SessionDetailLoaded) return;
+    final cursor = current.olderMessagesCursor;
+    if (cursor == null || current.isLoadingOlderMessages) return;
+
+    final generation = _transcriptGeneration;
+    emit(current.copyWith(isLoadingOlderMessages: true));
+    final page = await _loadService.loadOlderMessages(sessionId: _sessionId, before: cursor);
+    if (isClosed) return;
+
+    final latest = state;
+    if (latest is! SessionDetailLoaded) return;
+    // A refresh may have replaced the transcript while this page was in
+    // flight. This page describes the transcript as it was before that, so
+    // prepending it would splice unrelated history onto the refreshed page,
+    // leaving a gap. Compared by generation rather than by cursor value,
+    // because a refresh can legitimately land on the same cursor.
+    if (_transcriptGeneration != generation) return;
+
+    if (page == null) {
+      // Keep the cursor: the transcript did not end, the request failed, so
+      // the user can retry.
+      emit(latest.copyWith(isLoadingOlderMessages: false));
+      return;
+    }
+
+    // Merge by id rather than concatenating. Live events can append a message
+    // while the page is in flight, and an older page must never duplicate or
+    // reorder what is already shown.
+    final known = {for (final message in latest.messages) message.info.id};
+    final older = [
+      for (final message in page.messages)
+        if (!known.contains(message.info.id)) message,
+    ];
+    emit(
+      latest.copyWith(
+        messages: [...older, ...latest.messages],
+        olderMessagesCursor: page.olderMessagesCursor,
+        isLoadingOlderMessages: false,
+      ),
+    );
   }
 
   Future<void> _runLoadingRefresh({required _SessionRefreshTrigger trigger}) async {
@@ -492,9 +545,18 @@ class SessionDetailCubit extends Cubit<SessionDetailState> {
             SessionStatusBusy() => null,
           };
 
+          // The transcript is being replaced wholesale, so any older-page
+          // request still in flight no longer joins onto it.
+          _transcriptGeneration++;
           emit(
             latest.copyWith(
               messages: snapshot.messages,
+              // A refresh re-reads the newest page, so previously paged-back
+              // history is dropped and the cursor returns to that page's edge.
+              // Keeping older pages would leave a gap between them and the
+              // refreshed page whenever the session moved on meanwhile.
+              olderMessagesCursor: snapshot.olderMessagesCursor,
+              isLoadingOlderMessages: false,
               streamingText: streamingText,
               sessionStatus: refreshedSessionStatus,
               retryErrorMessage: retryMessage,
@@ -1824,8 +1886,10 @@ class SessionDetailCubit extends Cubit<SessionDetailState> {
       SessionStatusBusy() => null,
     };
 
+    _transcriptGeneration++;
     return SessionDetailLoaded(
       messages: snapshot.messages,
+      olderMessagesCursor: snapshot.olderMessagesCursor,
       streamingText: const {},
       sessionStatus: initialSessionStatus,
       retryErrorMessage: initialRetryMessage,
