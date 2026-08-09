@@ -50,14 +50,35 @@ final RegExp _uuidPattern = RegExp(
 class ClaudeLaunchSpec {
   ClaudeLaunchSpec({
     required this.binaryPath,
+    required this.workingDirectory,
     required this.launch,
     required this.model,
     required this.effort,
     required this.permissionMode,
-  });
+    Map<String, String> environment = const {},
+  }) : environment = Map.unmodifiable(environment) {
+    if (this.environment.containsKey("HOME")) {
+      throw ArgumentError.value(
+        this.environment,
+        "environment",
+        "must not override HOME; use CLAUDE_CONFIG_DIR for isolation",
+      );
+    }
+  }
 
   /// The `claude` executable: a `--claude-bin` override or a PATH name.
   final String binaryPath;
+
+  /// The session's directory, which becomes the process's working directory and
+  /// therefore the project the session belongs to.
+  final String workingDirectory;
+
+  /// Extra environment entries merged over the bridge's own environment.
+  ///
+  /// `HOME` must never appear here. Overriding it breaks macOS keychain lookup
+  /// and makes a logged-in user look logged out. Test isolation uses
+  /// `CLAUDE_CONFIG_DIR` instead.
+  final Map<String, String> environment;
 
   /// Whether this launch creates or resumes a session.
   final ClaudeSessionLaunch launch;
