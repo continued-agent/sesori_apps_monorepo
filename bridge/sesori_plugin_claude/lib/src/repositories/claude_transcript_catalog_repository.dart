@@ -46,6 +46,18 @@ class ClaudeTranscriptCatalogRepository {
   /// Scanning hundreds of transcripts must not stall the bridge's event loop.
   Future<List<ClaudeSessionRecord>> listSessionRecordsInIsolate() => Isolate.run(listSessionRecords);
 
+  /// Reads and maps every record for one session.
+  List<ClaudeTranscriptRecord> readTranscriptRecords({required String sessionId}) {
+    final path = findTranscriptPath(sessionId: sessionId);
+    if (path == null) throw StateError("Claude transcript not found for session $sessionId");
+    return _transcriptApi.readTranscript(transcriptPath: path).map(_mapTranscriptRecord).toList(growable: false);
+  }
+
+  /// Full transcript reads can reach tens of megabytes, so keep them off the
+  /// bridge event loop.
+  Future<List<ClaudeTranscriptRecord>> readTranscriptRecordsInIsolate({required String sessionId}) =>
+      Isolate.run(() => readTranscriptRecords(sessionId: sessionId));
+
   /// Every session, for bridge-derived project discovery.
   ///
   /// [knownDirectories] is part of the discovery contract so a plugin can keep
@@ -133,7 +145,7 @@ class ClaudeTranscriptCatalogRepository {
     for (final line in header) {
       final record = _mapTranscriptRecord(line);
       switch (record) {
-        case ClaudeTranscriptContentRecord():
+        case ClaudeTranscriptAttributedRecord():
           // A subagent's records never describe the parent session.
           if (record.isSidechain ?? false) continue;
           // The filename is authoritative. A present record id is only a
@@ -216,10 +228,49 @@ ClaudeTranscriptRecord _mapTranscriptRecord(ClaudeTranscriptLineDto line) {
     return ClaudeTranscriptUnknownRecord(type: null, sessionId: dto.sessionId, raw: line.raw);
   }
 
-  final kind = ClaudeTranscriptContentKind.tryParse(type);
-  if (kind != null) {
-    return ClaudeTranscriptContentRecord(
-      kind: kind,
+  if (type == ClaudeTranscriptUserRecord.wireType) {
+    final id = _nonEmpty(dto.uuid);
+    if (id != null) {
+      return ClaudeTranscriptUserRecord(
+        id: id,
+        content: dto.message?.content,
+        isMeta: dto.isMeta ?? false,
+        isVisibleInTranscriptOnly: dto.isVisibleInTranscriptOnly ?? false,
+        cwd: dto.cwd,
+        timestamp: dto.timestamp,
+        isSidechain: dto.isSidechain,
+        gitBranch: dto.gitBranch,
+        version: dto.version,
+        sessionId: dto.sessionId,
+        raw: line.raw,
+      );
+    }
+    return _unreplayableMessageRecord(line: line);
+  }
+
+  if (type == ClaudeTranscriptAssistantRecord.wireType) {
+    final id = _nonEmpty(dto.message?.id);
+    if (id != null) {
+      return ClaudeTranscriptAssistantRecord(
+        id: id,
+        model: _nonEmpty(dto.message?.model),
+        content: dto.message?.content,
+        cwd: dto.cwd,
+        timestamp: dto.timestamp,
+        isSidechain: dto.isSidechain,
+        gitBranch: dto.gitBranch,
+        version: dto.version,
+        sessionId: dto.sessionId,
+        raw: line.raw,
+      );
+    }
+    return _unreplayableMessageRecord(line: line);
+  }
+
+  final contextKind = ClaudeTranscriptContextKind.tryParse(type);
+  if (contextKind != null) {
+    return ClaudeTranscriptContextRecord(
+      kind: contextKind,
       cwd: dto.cwd,
       timestamp: dto.timestamp,
       isSidechain: dto.isSidechain,
@@ -238,4 +289,17 @@ ClaudeTranscriptRecord _mapTranscriptRecord(ClaudeTranscriptLineDto line) {
   }
 
   return ClaudeTranscriptUnknownRecord(type: type, sessionId: dto.sessionId, raw: line.raw);
+}
+
+ClaudeTranscriptUnreplayableMessageRecord _unreplayableMessageRecord({required ClaudeTranscriptLineDto line}) {
+  final dto = line.record;
+  return ClaudeTranscriptUnreplayableMessageRecord(
+    cwd: dto.cwd,
+    timestamp: dto.timestamp,
+    isSidechain: dto.isSidechain,
+    gitBranch: dto.gitBranch,
+    version: dto.version,
+    sessionId: dto.sessionId,
+    raw: line.raw,
+  );
 }
