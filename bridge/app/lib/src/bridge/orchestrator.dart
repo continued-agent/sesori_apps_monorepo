@@ -42,6 +42,7 @@ import "../repositories/bridge_settings_repository.dart";
 import "../repositories/catalog_import_repository.dart";
 import "../repositories/project_catalog_identity_calculator.dart";
 import "../routing/cancel_catalog_import_handler.dart";
+import "../routing/get_bridge_settings_handler.dart";
 import "../routing/get_catalog_import_statuses_handler.dart";
 import "../routing/get_plugin_management_handler.dart";
 import "../routing/get_plugin_setup_handler.dart";
@@ -56,6 +57,7 @@ import "../services/catalog_import_service.dart";
 import "../services/plugin_lifecycle_service.dart";
 import "../services/project_view_tracker.dart";
 import "../services/pull_request_refresh_settings_service.dart";
+import "../services/yolo_settings_service.dart";
 import "../version.dart";
 import "api/filesystem_api.dart";
 import "api/gh_cli_api.dart";
@@ -517,6 +519,11 @@ class Orchestrator {
       sessionRepository: sessionRepository,
       permissionRepository: permissionRepository,
       pendingInteractionService: pendingInteractionService,
+      bridgeSettingsRepository: _bridgeSettingsRepository,
+    );
+    final yoloSettingsService = YoloSettingsService(
+      bridgeSettingsRepository: _bridgeSettingsRepository,
+      permissionAutoApprovalService: permissionAutoApprovalService,
     );
     final pluginEventListeners = [
       PluginEventListener(source: _pluginRuntime.backendEvents, dispatcher: sessionEventDispatcher),
@@ -559,9 +566,11 @@ class Orchestrator {
         HealthCheckHandler(healthRepository: healthRepository),
         GetPluginManagementHandler(lifecycleService: _pluginLifecycleService),
         PatchPluginIdleTimeoutHandler(lifecycleService: _pluginLifecycleService),
+        GetBridgeSettingsHandler(settingsRepository: _bridgeSettingsRepository),
         GetPullRequestRefreshSettingsHandler(settingsService: pullRequestRefreshSettingsService),
         PatchBridgeSettingsHandler(
           pullRequestRefreshSettingsService: pullRequestRefreshSettingsService,
+          yoloSettingsService: yoloSettingsService,
         ),
         PostPluginLifecycleCommandHandler(lifecycleService: _pluginLifecycleService),
         GetPluginSetupHandler(lifecycleService: _pluginLifecycleService),
@@ -602,7 +611,7 @@ class Orchestrator {
         GetProjectQuestionsHandler(questionRepository: questionRepository),
         GetSessionPermissionsHandler(
           permissionRepository: permissionRepository,
-          suppressPendingPermissions: config.yolo,
+          yoloSettingsService: yoloSettingsService,
         ),
         ReplyToQuestionHandler(pendingInteractionService: pendingInteractionService),
         RejectQuestionHandler(pendingInteractionService: pendingInteractionService),
@@ -663,6 +672,7 @@ class Orchestrator {
       projectViewTracker: projectViewTracker,
       projectActivityService: projectActivityService,
       permissionAutoApprovalService: permissionAutoApprovalService,
+      yoloSettingsService: yoloSettingsService,
       pendingInteractionService: pendingInteractionService,
       sessionAbortService: sessionAbortService,
       sessionOperationDispatcher: sessionOperationDispatcher,
@@ -740,6 +750,7 @@ class OrchestratorSession {
   final ProjectViewTracker _projectViewTracker;
   final SessionRepository _sessionRepository;
   final PermissionAutoApprovalService _permissionAutoApprovalService;
+  final YoloSettingsService _yoloSettingsService;
   final PendingInteractionService _pendingInteractionService;
   final SessionOperationDispatcher _sessionOperationDispatcher;
   final SessionMutationDispatcher _sessionMutationDispatcher;
@@ -812,6 +823,7 @@ class OrchestratorSession {
     required ProjectViewTracker projectViewTracker,
     required ProjectActivityService projectActivityService,
     required PermissionAutoApprovalService permissionAutoApprovalService,
+    required YoloSettingsService yoloSettingsService,
     required PendingInteractionService pendingInteractionService,
     required SessionAbortService sessionAbortService,
     required SessionOperationDispatcher sessionOperationDispatcher,
@@ -851,6 +863,7 @@ class OrchestratorSession {
        _projectViewTracker = projectViewTracker,
        _sessionRepository = sessionRepository,
        _permissionAutoApprovalService = permissionAutoApprovalService,
+       _yoloSettingsService = yoloSettingsService,
        _pendingInteractionService = pendingInteractionService,
        _sessionOperationDispatcher = sessionOperationDispatcher,
        _sessionMutationDispatcher = sessionMutationDispatcher,
@@ -1031,7 +1044,7 @@ class OrchestratorSession {
           })
           .addTo(_subscriptions);
 
-      if (config.yolo) await _permissionAutoApprovalService.approvePending();
+      if (_yoloSettingsService.currentSettings.enabled) await _permissionAutoApprovalService.approvePending();
       final startupSummary = await _buildProjectsSummary();
       if (startupSummary != null) {
         _completionListener.handleSseEvent(startupSummary);
@@ -1472,7 +1485,7 @@ class OrchestratorSession {
         if (wasAutoApproved) return;
       }
 
-      if (config.yolo && event is BridgeSsePermissionAsked) {
+      if (_yoloSettingsService.currentSettings.enabled && event is BridgeSsePermissionAsked) {
         if (_cancelled) return;
         await _permissionAutoApprovalService.approve(
           requestId: event.requestID,
@@ -1485,10 +1498,10 @@ class OrchestratorSession {
         await _projectActivityService.reconcile(pluginId: pluginId).catchError((Object e, StackTrace st) {
           Log.w("ProjectActivityService: server-connected reconciliation failed", e, st);
         });
-        if (config.yolo) await _permissionAutoApprovalService.approvePending();
+        if (_yoloSettingsService.currentSettings.enabled) await _permissionAutoApprovalService.approvePending();
       }
 
-      if (config.yolo && event is BridgeSseProjectUpdated && !terminalHandoff) {
+      if (_yoloSettingsService.currentSettings.enabled && event is BridgeSseProjectUpdated && !terminalHandoff) {
         await _permissionAutoApprovalService.approvePending();
       }
 
