@@ -3,11 +3,12 @@
 ## Current State
 
 - **Plan slug:** `attachment-references`
-- **Series state:** Step 1 PR open
-- **Current step:** 1/11
-- **Implementation base:** `origin/main` at `944e07e7`
+- **Series state:** Step 2 PR open
+- **Current step:** 2/11
+- **Implementation base:** `origin/main` at `3803df12`
 - **Plan PR:** [#807](https://github.com/sesori-ai/sesori_apps_monorepo/pull/807)
-- **Next action:** Monitor Step 1 review and CI; begin Step 2 only after merge
+- **Current PR:** [#812](https://github.com/sesori-ai/sesori_apps_monorepo/pull/812)
+- **Next action:** Monitor Step 2 review/CI and begin Step 3 locally
 
 ## Plan Review
 
@@ -30,8 +31,8 @@
 
 | Done | Step | Exact PR title | Changed-line target | State |
 |---|---|---|---:|---|
-| [ ] | 1/11 | `🌱 [attachment-references] docs: plan lazy transcript attachments [step 1/11]` | 650-1,100 | [PR #807](https://github.com/sesori-ai/sesori_apps_monorepo/pull/807) open |
-| [ ] | 2/11 | `🚧 [attachment-references] feat(protocol): describe stored transcript images [step 2/11]` | 900-1,450 | Pending |
+| [x] | 1/11 | `🌱 [attachment-references] docs: plan lazy transcript attachments [step 1/11]` | 650-1,100 | [PR #807](https://github.com/sesori-ai/sesori_apps_monorepo/pull/807) merged |
+| [ ] | 2/11 | `🚧 [attachment-references] feat(protocol): describe stored transcript images [step 2/11]` | 750-1,100 | [PR #812](https://github.com/sesori-ai/sesori_apps_monorepo/pull/812) open |
 | [ ] | 3/11 | `⚙️ [attachment-references] feat(bridge): serve stored image renditions [step 3/11]` | 900-1,400 | Pending |
 | [ ] | 4/11 | `⚙️ [attachment-references] feat(bridge): reference images in history pages [step 4/11]` | 700-1,150 | Pending |
 | [ ] | 5/11 | `🚧 [attachment-references] feat(bridge): reference images in live events [step 5/11]` | 1,100-1,500 | Pending |
@@ -71,6 +72,14 @@
   Dart/Flutter suites were run for this documentation-only step. Committed as
   `6998f477`, pushed, and opened as
   [PR #807](https://github.com/sesori-ai/sesori_apps_monorepo/pull/807).
+- Step 2: Added stored-image identity, inline-default delivery capability on
+  history and SSE requests, and typed rendition DTOs; regenerated shared code
+  and kept bridge/client behavior explicitly inline with metadata placeholders.
+  Shared full tests, focused bridge/client tests, and source analysis across
+  shared, bridge, mobile, module_core, and desktop pass. Architecture
+  implementation review approved the contract and compatibility boundaries.
+  Committed as `9753d350`, pushed, and opened as
+  [PR #812](https://github.com/sesori-ai/sesori_apps_monorepo/pull/812).
 
 ## Findings And Plan Deltas
 
