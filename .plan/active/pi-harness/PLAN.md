@@ -238,10 +238,14 @@ One client owns one child process and:
 - closes stdin first, then uses bounded SIGTERM/SIGKILL on POSIX and bounded
   process termination on Windows.
 
-Only top-level discriminator routing and the unknown-envelope fallback are
-hand-written. Every known response, event, dialog, and nested payload uses a
-generated DTO; DTOs land with their first consumer so codegen does not create
-unconsumed multi-thousand-line PRs.
+Transport envelopes and the response, event, extension-dialog, and assistant-
+delta discriminator variants are hand-written sealed types with explicit
+unknown fallbacks. Closed leaf payloads use generated DTOs and land with their
+first consumer so codegen does not create unconsumed multi-thousand-line PRs.
+Step 3 consumes no closed leaf payload, so its generated DTO count is zero;
+Step 4 adds codegen with the first closed session metadata leaves.
+This matches the existing Claude transport boundary while keeping every known
+Pi top-level variant typed.
 
 ### Session catalog
 
@@ -642,8 +646,10 @@ that omit plugin identity. No unrelated plugin/runtime refactor is planned.
 
 ### Step 3/15: Add the JSONL RPC transport
 
-- Add hand-written discriminator/unknown routing plus generated DTOs for every
-  known response, event, dialog, and consumed nested payload.
+- Add hand-written sealed discriminator/unknown routing for every known
+  response, event, extension dialog, and assistant delta; generate only closed
+  leaf DTOs consumed in this step. No closed leaf is consumed in this step, so
+  codegen begins with Step 4's session metadata DTOs.
 - Add `PiRpcClient` with strict LF framing, request IDs, asynchronous prompt
   acknowledgement, continuous stdout draining, bounded stderr diagnostics,
   pending failure on exit, and graceful/forced teardown.
