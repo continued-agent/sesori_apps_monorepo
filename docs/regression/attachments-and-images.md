@@ -25,12 +25,16 @@ content the transcript renders live and after reload.
 - Live streaming and history replay converge: same image, same message and part
   identity, same position relative to text and tool output. The viewer offers
   copy, share, and save on the original, and an unknown shape degrades safely.
+- History requests default to the released bounded inline shape. A client that
+  explicitly requests stored references receives bridge-scoped image metadata
+  in the same part and tool-attachment order, including after archive; a missing
+  stored file degrades to metadata instead of failing the transcript.
 
 ## Regression Levels
 
 | Level | Additional coverage |
 |---|---|
-| L1 Smoke | Automated, no plugin: the attachment contract's decode, size-bound, and unknown-variant behavior holds in its owning suites. |
+| L1 Smoke | Automated, no plugin: the attachment contract's decode, size-bound, and unknown-variant behavior holds in its owning suites; history projection preserves inline defaults and returns stored references only when requested. |
 | L2 Routine | Live plugin, one representative plugin: a backend-produced image survives the plugin boundary as a bounded client-safe attachment, live and after a cold history read. |
 | L3 Release | Client end to end on the release-target client platform, every supporting production plugin: staged composer images sent and echoed per attachment-capable plugin, generated and tool-output images displayed, text/image/text order preserved live and after reload, viewer copy/share/save. |
 | L4 Extended | Live plugin for budget-exceeding or mixed collections, malformed types, attachment remote-URL rejection, abort, and plugin restart; relay integration for a second client loading the same transcript. Every supporting production plugin. |
@@ -68,9 +72,9 @@ live, after paging back, or after a reopen, and vary the plugin.
   covered by the remote-attachment guarantee.
 - Cursor path-only generated images are read locally inside its plugin and
   delivered as bounded attachments; the host path still never crosses the wire.
-- Lazy stored-image delivery (thumbnail-first, on-demand originals, larger
-  budgets) is unfinished. The stored-reference variant exists in the contract
-  with an inline default; record only inline and metadata delivery.
+- Lazy stored-image delivery remains unfinished in product clients and live
+  events. The bridge supports explicit stored-reference history reads and
+  on-demand renditions, while normal clients still request inline history.
 
 ## Sources
 

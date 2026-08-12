@@ -477,6 +477,7 @@ class Orchestrator {
       ),
       sessionRepository: sessionRepository,
       attachmentThumbnailBuilder: const AttachmentThumbnailBuilder(),
+      bridgeIdProvider: _bridgeRegistrationService,
     );
     final sessionLifecycleService = SessionLifecycleService(
       worktreeService: worktreeService,
