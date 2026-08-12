@@ -3,12 +3,12 @@
 ## Current State
 
 - **Plan slug:** `codex-mobile-login`
-- **Series state:** Step 1 merged; Step 2 PR open
-- **Current step:** 2/8
-- **Implementation base:** `origin/main` at `ea1bc354` (includes Step 1)
+- **Series state:** Steps 1-2 merged; Step 3 PR open
+- **Current step:** 3/8
+- **Implementation base:** Step 2 merge commit `67310433`
 - **Plan PR:** [#824](https://github.com/sesori-ai/sesori_apps_monorepo/pull/824)
-- **Current PR:** [#827](https://github.com/sesori-ai/sesori_apps_monorepo/pull/827)
-- **Next action:** Monitor Step 2 review/CI and begin Step 3 locally
+- **Current PR:** [#833](https://github.com/sesori-ai/sesori_apps_monorepo/pull/833)
+- **Next action:** Monitor Step 3 review/CI and begin Step 4 locally
 
 ## Plan Review
 
@@ -27,8 +27,8 @@
 | Done | Step | Exact PR title | Changed-line target | State |
 |---|---|---|---:|---|
 | [x] | 1/8 | `🌱 [codex-mobile-login] docs: plan mobile Codex login [step 1/8]` | 450-850 | [PR #824](https://github.com/sesori-ai/sesori_apps_monorepo/pull/824) merged |
-| [ ] | 2/8 | `⚙️ [codex-mobile-login] refactor(codex): prepare authentication primitives [step 2/8]` | 850-1,400 | [PR #827](https://github.com/sesori-ai/sesori_apps_monorepo/pull/827) open |
-| [ ] | 3/8 | `🚧 [codex-mobile-login] feat(codex): implement device authentication [step 3/8]` | 850-1,450 | Pending |
+| [x] | 2/8 | `⚙️ [codex-mobile-login] refactor(codex): prepare authentication primitives [step 2/8]` | 850-1,400 | [PR #827](https://github.com/sesori-ai/sesori_apps_monorepo/pull/827) merged |
+| [ ] | 3/8 | `🚧 [codex-mobile-login] feat(codex): implement device authentication [step 3/8]` | 850-1,450 | [PR #833](https://github.com/sesori-ai/sesori_apps_monorepo/pull/833) open |
 | [ ] | 4/8 | `⚙️ [codex-mobile-login] feat(protocol): describe harness authentication [step 4/8]` | 650-1,200 | Pending |
 | [ ] | 5/8 | `🚧 [codex-mobile-login] feat(bridge): expose harness authentication [step 5/8]` | 950-1,500 | Pending |
 | [ ] | 6/8 | `🚧 [codex-mobile-login] feat(client): orchestrate harness authentication [step 6/8]` | 900-1,500 | Pending |
@@ -71,6 +71,15 @@
   schema error (`no such column: replacement_seq`). Committed as `3d71e4cf`,
   rebased onto `origin/main`, pushed, and opened as
   [PR #827](https://github.com/sesori-ai/sesori_apps_monorepo/pull/827).
+- Step 3: `dart test` passes all 152 plugin-interface tests and all 357 Codex
+  plugin tests. `dart analyze --fatal-infos` reports no issues in both packages,
+  `git diff --check origin/main...HEAD` passes, and
+  `git diff --numstat origin/main...HEAD` reports 850 additions and 27 deletions.
+  The required architecture implementation
+  review could not run because the review sub-agent failed before reading code
+  with the internal task-store schema error `no such column: replacement_seq`.
+  Committed as `36ec1eca`, pushed, and opened as
+  [PR #833](https://github.com/sesori-ai/sesori_apps_monorepo/pull/833).
 
 ## Findings And Plan Deltas
 
@@ -101,3 +110,11 @@
   Server transport with bounded child cleanup, and typed account start/cancel/
   completion API models. Existing WebSocket generation behavior remains
   unchanged and no bridge or client capability is exposed yet.
+- **2026-08-11 - Step 3 started:** Created local branch
+  `codex-mobile-login-device-authentication` from the Step 2 PR branch. It
+  remains local until Step 2 merges.
+- **2026-08-12 - Step 3 implementation:** Added the optional descriptor
+  capability and safe sealed events, then composed Codex Client/API/Repository/
+  Service ownership with private login-ID correlation, HTTPS validation,
+  abort-driven upstream cancellation, sanitized remote failures, and awaited
+  child cleanup. No route or client capability is exposed yet.
