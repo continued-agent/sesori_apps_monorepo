@@ -281,6 +281,12 @@ void main() {
       await harness.createSession();
       final process = harness.processes.single;
       await waitForFrame(process, "user");
+      harness.processRepository.recordAppliedSelection(
+        sessionId: testSessionId,
+        model: "default",
+        effort: null,
+        permissionMode: ClaudePermissionMode.plan,
+      );
       process.emit({
         "type": "control_request",
         "request_id": "permission-1",
@@ -324,6 +330,56 @@ void main() {
           ],
         ),
         isFalse,
+      );
+      await subscription.cancel();
+    });
+
+    test("publishes Default prompt defaults after approving ExitPlanMode", () async {
+      final events = <BridgeSseEvent>[];
+      final subscription = harness.plugin.events.listen(events.add);
+      await harness.createSession();
+      final process = harness.processes.single;
+      await waitForFrame(process, "user");
+      process.emit({
+        "type": "control_request",
+        "request_id": "exit-plan-1",
+        "request": {
+          "subtype": "can_use_tool",
+          "tool_name": "ExitPlanMode",
+          "tool_use_id": "toolu-exit-plan",
+          "requires_user_interaction": true,
+          "input": const <String, Object?>{},
+        },
+      });
+      await pump();
+
+      await harness.plugin.replyToQuestion(
+        questionId: "br-1",
+        sessionId: testSessionId,
+        answers: const [[]],
+      );
+      await pump();
+
+      final defaults = events.whereType<BridgeSseSessionPromptDefaultsChanged>().single;
+      expect(defaults.sessionID, testSessionId);
+      expect(defaults.agent, "Default");
+      expect(defaults.model, isNull);
+
+      process.emit(_result());
+      await pump();
+      final permissionModeControlsBefore = _controlSubtypes(process).where((subtype) => subtype == "set_permission_mode").length;
+      await harness.plugin.sendPrompt(
+        sessionId: testSessionId,
+        parts: const [PluginPromptPart.text(text: "plan again")],
+        variant: null,
+        agent: "Plan",
+        model: (providerID: "anthropic", modelID: "default"),
+      );
+      final permissionMode = await _waitForControl(process, "set_permission_mode");
+      expect(_request(permissionMode)["mode"], "plan");
+      expect(
+        _controlSubtypes(process).where((subtype) => subtype == "set_permission_mode"),
+        hasLength(permissionModeControlsBefore + 1),
       );
       await subscription.cancel();
     });

@@ -319,11 +319,30 @@ final class ClaudePlugin extends BridgeDerivedProjectsPluginApi implements Persi
     required String sessionId,
     required List<List<String>> answers,
   }) async {
+    final exitsPlanMode = _approvals.isExitPlanModeQuestion(id: questionId);
     if (!_approvals.hasQuestion(id: questionId)) {
       throw const PluginOperationException.notFound("replyToQuestion", message: "question not found");
     }
     if (!_approvals.replyQuestion(id: questionId, answers: answers)) {
       throw const PluginOperationException("replyToQuestion", message: "Claude rejected the question response");
+    }
+    if (exitsPlanMode) {
+      final applied = _processes.appliedSelection(sessionId: sessionId);
+      if (applied != null) {
+        _processes.recordAppliedSelection(
+          sessionId: sessionId,
+          model: applied.model,
+          effort: applied.effort,
+          permissionMode: ClaudePermissionMode.auto,
+        );
+      }
+      _eventBuffer.add(
+        BridgeSseSessionPromptDefaultsChanged(
+          sessionID: sessionId,
+          agent: "Default",
+          model: null,
+        ),
+      );
     }
   }
 
