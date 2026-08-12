@@ -3,12 +3,12 @@
 ## Current State
 
 - **Plan slug:** `attachment-references`
-- **Series state:** Step 4 PR open
-- **Current step:** 4/11
-- **Implementation base:** `origin/main` at `ec290e14`
+- **Series state:** Step 5 PR open
+- **Current step:** 5/11
+- **Implementation base:** `origin/main` at `82ab02c1`
 - **Plan PR:** [#807](https://github.com/sesori-ai/sesori_apps_monorepo/pull/807)
-- **Current PR:** [#843](https://github.com/sesori-ai/sesori_apps_monorepo/pull/843)
-- **Next action:** Monitor Step 4 while implementing Step 5 locally
+- **Current PR:** [#851](https://github.com/sesori-ai/sesori_apps_monorepo/pull/851)
+- **Next action:** Monitor Step 5 while implementing Step 6 locally
 
 ## Plan Review
 
@@ -34,8 +34,8 @@
 | [x] | 1/11 | `🌱 [attachment-references] docs: plan lazy transcript attachments [step 1/11]` | 650-1,100 | [PR #807](https://github.com/sesori-ai/sesori_apps_monorepo/pull/807) merged |
 | [x] | 2/11 | `🚧 [attachment-references] feat(protocol): describe stored transcript images [step 2/11]` | 750-1,100 | [PR #812](https://github.com/sesori-ai/sesori_apps_monorepo/pull/812) merged |
 | [x] | 3/11 | `🚧 [attachment-references] feat(bridge): serve stored image renditions [step 3/11]` | 1,800-2,300 | [PR #818](https://github.com/sesori-ai/sesori_apps_monorepo/pull/818) merged |
-| [ ] | 4/11 | `⚙️ [attachment-references] feat(bridge): reference images in history pages [step 4/11]` | 700-1,150 | [PR #843](https://github.com/sesori-ai/sesori_apps_monorepo/pull/843) open |
-| [ ] | 5/11 | `🚧 [attachment-references] feat(bridge): reference images in live events [step 5/11]` | 1,100-1,500 | Pending |
+| [x] | 4/11 | `⚙️ [attachment-references] feat(bridge): reference images in history pages [step 4/11]` | 700-1,150 | [PR #843](https://github.com/sesori-ai/sesori_apps_monorepo/pull/843) merged |
+| [ ] | 5/11 | `🚧 [attachment-references] feat(bridge): reference images in live events [step 5/11]` | 1,100-1,500 | [PR #851](https://github.com/sesori-ai/sesori_apps_monorepo/pull/851) open |
 | [ ] | 6/11 | `⚙️ [attachment-references] feat(bridge): retain larger transcript images [step 6/11]` | 900-1,450 | Pending |
 | [ ] | 7/11 | `⚙️ [attachment-references] feat(client): load stored image renditions [step 7/11]` | 850-1,350 | Pending |
 | [ ] | 8/11 | `⚙️ [attachment-references] feat(client): cache encrypted image previews [step 8/11]` | 850-1,350 | Pending |
@@ -115,6 +115,23 @@
   across 11 files (788 changed lines), within the 700-1,150 target;
   `git diff --check origin/main...HEAD` passes.
   Implementation was committed as `a693d3c5` and synchronized in `5f37e20e`.
+- Step 5 (local): Moved finalized part capture from
+  `ChatHistoryListener` to the Orchestrator, added
+  `ChatHistoryService.requiresAwaitedAttachmentCapture` plus one queued
+  `capturePartForDelivery` that persists once and returns typed inline/reference
+  parts projected from the complete stored collection, and gave each SSE
+  subscriber and orphan queue its own attachment delivery mode with
+  matching-mode adoption. `dart analyze --fatal-infos` passes in the bridge app;
+  67 focused tests and all 2,587 bridge-app tests pass, including new coverage for the predicate,
+  one-write dual shaping, cross-part legacy budgeting, capture failure fallback,
+  listener ownership, mixed old/new subscribers, orphan mode matching, and
+  orchestrator store-before-deliver, ordering, invisible parts, and generation
+  fencing. Architecture implementation review approved after moving finalized
+  part wire visibility and event construction fully behind `BridgeEventMapper`.
+  After synchronization with `origin/main` at `82ab02c1`, the final diff has
+  1,259 additions and 93 deletions across 17 files (1,352 changed lines), within
+  the 1,100-1,500 target; `git diff --check origin/main...HEAD` passes.
+  Implementation was committed as `c9d012fb` and synchronized in `23cc34ef`.
 
 ## Findings And Plan Deltas
 
@@ -169,3 +186,7 @@
 - **2026-08-11 - Relative XDG review fix:** Relative `XDG_DATA_HOME` values now
   fall back to the absolute home-based root, preventing attachment originals
   from being written beneath the bridge's process working directory.
+- **2026-08-12 - Live part ordering:** The user approved routing every finalized
+  part capture through the Orchestrator. Splitting ordinary parts through the
+  listener and awaited image parts through the Orchestrator could let a later
+  ACP text part enter the history queue first and reverse persisted part order.
