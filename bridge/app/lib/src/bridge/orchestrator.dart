@@ -70,6 +70,7 @@ import "metadata_service.dart";
 import "models/bridge_config.dart";
 import "relay_client.dart";
 import "repositories/agent_repository.dart";
+import "repositories/attachment_thumbnail_builder.dart";
 import "repositories/chat_history_repository.dart";
 import "repositories/filesystem_repository.dart";
 import "repositories/health_repository.dart";
@@ -104,6 +105,7 @@ import "routing/get_current_project_handler.dart";
 import "routing/get_project_questions_handler.dart";
 import "routing/get_projects_handler.dart";
 import "routing/get_providers_handler.dart";
+import "routing/get_session_attachment_handler.dart";
 import "routing/get_session_diffs_handler.dart";
 import "routing/get_session_handler.dart";
 import "routing/get_session_messages_handler.dart";
@@ -185,7 +187,6 @@ class Orchestrator {
   final ChatHistoryDatabase _chatHistoryDatabase;
   final AttachmentSpillStorage _attachmentSpillStorage;
   final ArchivedSessionStorage _archivedSessionStorage;
-  final AttachmentSpillStorage _archivedAttachmentStorage;
   final http.Client _httpClient;
   final ProcessRunner _processRunner;
   final AccessTokenProvider _accessTokenProvider;
@@ -209,7 +210,6 @@ class Orchestrator {
     required ChatHistoryDatabase chatHistoryDatabase,
     required AttachmentSpillStorage attachmentSpillStorage,
     required ArchivedSessionStorage archivedSessionStorage,
-    required AttachmentSpillStorage archivedAttachmentStorage,
     required http.Client httpClient,
     required ProcessRunner processRunner,
     required AccessTokenProvider accessTokenProvider,
@@ -232,7 +232,6 @@ class Orchestrator {
        _chatHistoryDatabase = chatHistoryDatabase,
        _attachmentSpillStorage = attachmentSpillStorage,
        _archivedSessionStorage = archivedSessionStorage,
-       _archivedAttachmentStorage = archivedAttachmentStorage,
        _httpClient = httpClient,
        _processRunner = processRunner,
        _accessTokenProvider = accessTokenProvider,
@@ -475,9 +474,9 @@ class Orchestrator {
         chatHistoryDao: _chatHistoryDatabase.chatHistoryDao,
         attachmentSpillStorage: _attachmentSpillStorage,
         archivedSessionStorage: _archivedSessionStorage,
-        archivedAttachmentStorage: _archivedAttachmentStorage,
       ),
       sessionRepository: sessionRepository,
+      attachmentThumbnailBuilder: const AttachmentThumbnailBuilder(),
     );
     final sessionLifecycleService = SessionLifecycleService(
       worktreeService: worktreeService,
@@ -585,6 +584,7 @@ class Orchestrator {
           sessionRepository: sessionRepository,
           prSyncService: prSyncService,
         ),
+        GetSessionAttachmentHandler(chatHistoryService: chatHistoryService),
         GetSessionMessagesHandler(chatHistoryService: chatHistoryService),
         GetSessionsHandler(
           sessionRepository: sessionRepository,
