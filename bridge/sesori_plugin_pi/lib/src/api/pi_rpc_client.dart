@@ -100,6 +100,9 @@ class PiRpcClient({
   required final PiLaunchSpec _launchSpec,
   required final PiProcessFactory _processFactory,
 }) {
+  static const String noModelsDiagnosticPrefix =
+      "No models available. Use /login to log into a provider via OAuth or API key. See:";
+
   /// How many parsed frames are held while no router has attached yet.
   ///
   /// Pi streams continuously, so an unbounded startup buffer would grow with
@@ -192,6 +195,7 @@ class PiRpcClient({
     );
 
     final stdoutDone = Completer<void>();
+    final stderrDone = Completer<void>();
 
     process.stdout
         // One malformed byte must not tear down the unconditional stdout drain.
@@ -225,13 +229,19 @@ class PiRpcClient({
           (line) {
             if (generation == _generation) _recordStderr(line);
           },
-          onError: (Object error, StackTrace stack) => Log.w("[pi] stderr stream failed", error, stack),
+          onError: (Object error, StackTrace stack) {
+            if (!stderrDone.isCompleted) stderrDone.complete();
+            Log.w("[pi] stderr stream failed", error, stack);
+          },
+          onDone: () {
+            if (!stderrDone.isCompleted) stderrDone.complete();
+          },
           cancelOnError: false,
         );
 
     unawaited(
       process.exitCode.then((code) async {
-        await stdoutDone.future;
+        await Future.wait([stdoutDone.future, stderrDone.future]);
         _exitCode = code;
         if (!_exited.isCompleted) _exited.complete(code);
         if (generation != _generation) return;
@@ -423,6 +433,7 @@ class PiRpcClient({
   static final RegExp _nonAlphanumeric = RegExp("[^a-z0-9]");
 
   String _redact(String value) {
+    if (value.startsWith(noModelsDiagnosticPrefix)) return noModelsDiagnosticPrefix;
     try {
       final decoded = jsonDecode(value);
       if (decoded is Map || decoded is List) return jsonEncode(_redactJson(decoded));

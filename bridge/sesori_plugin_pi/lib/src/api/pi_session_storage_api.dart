@@ -1,12 +1,14 @@
 import "dart:convert" show utf8;
 import "dart:io";
 import "dart:isolate";
+import "dart:typed_data" show BytesBuilder;
 
 import "package:path/path.dart" as p;
 import "package:sesori_bridge_foundation/sesori_bridge_foundation.dart" show resolveUserHomeDirectory;
 import "package:sesori_plugin_interface/sesori_plugin_interface.dart" show Log;
 import "package:sesori_shared/sesori_shared.dart" show jsonDecodeMap;
 
+import "models/pi_session_history_dto.dart";
 import "models/pi_session_metadata_dto.dart";
 
 final class const PiSessionMetadata({
@@ -17,6 +19,19 @@ final class const PiSessionMetadata({
   required final DateTime? createdAt,
   required final DateTime updatedAt,
 });
+
+final class const PiResolvedSession({
+  required final PiSessionMetadata metadata,
+  required final String path,
+});
+
+final class const PiInvalidSessionHistoryException({
+  required final String path,
+  required final Object cause,
+}) implements Exception {
+  @override
+  String toString() => "Invalid Pi session history";
+}
 
 final class const PiSessionStorageConflictException({
   required final String sessionId,
@@ -43,8 +58,20 @@ class PiSessionStorageApi({required Map<String, String> environment}) {
   }
 
   Future<String?> resolveSessionPath({required String sessionId, required Set<String> knownDirectories}) async {
+    return (await resolveSession(sessionId: sessionId, knownDirectories: knownDirectories))?.path;
+  }
+
+  Future<PiResolvedSession?> resolveSession({
+    required String sessionId,
+    required Set<String> knownDirectories,
+  }) async {
     final result = await _scan(knownDirectories: knownDirectories);
-    return result.pathsById[sessionId];
+    final path = result.pathsById[sessionId];
+    if (path == null) return null;
+    for (final metadata in result.sessions) {
+      if (metadata.id == sessionId) return PiResolvedSession(metadata: metadata, path: path);
+    }
+    return null;
   }
 
   Future<String?> resolveEffectiveSessionDirectory({required String directory}) async {
@@ -54,6 +81,23 @@ class PiSessionStorageApi({required Map<String, String> environment}) {
     );
     _logDiagnostics(result.diagnostics);
     return result.path;
+  }
+
+  Future<PiSessionFileHistoryDto> _readSessionHistory({required String path}) async {
+    final result = await Isolate.run(() => _readPiSessionHistory(path: path));
+    if (result.malformedLineCount > 0) {
+      Log.w(
+        "[pi] skipped ${result.malformedLineCount} malformed session history record(s) at '${result.path}'",
+        result.firstMalformedRecordError,
+        result.firstMalformedRecordStack,
+      );
+    }
+    switch (result) {
+      case _PiHistoryReadSuccess(:final history):
+        return history;
+      case _PiHistoryReadFailure(:final error, :final stackTrace):
+        Error.throwWithStackTrace(error, stackTrace);
+    }
   }
 
   Future<_PiScanResult> _scan({required Set<String> knownDirectories}) async {
@@ -132,6 +176,96 @@ class PiSessionStorageApi({required Map<String, String> environment}) {
       );
     }
   }
+}
+
+class PiSessionHistoryStorageApi({required final PiSessionStorageApi storageApi}) {
+  static const int historyRecordByteLimit = 72 * 1024 * 1024;
+
+  Future<PiSessionFileHistoryDto> readSessionHistory({required String path}) =>
+      storageApi._readSessionHistory(path: path);
+}
+
+_PiHistoryReadResult _readPiSessionHistory({required String path}) {
+  var resolvedPath = _absolute(path);
+  final entries = <PiSessionFileEntryDto>[];
+  PiSessionFileHeaderDto? header;
+  Object? firstFailure;
+  StackTrace? firstFailureStack;
+  Object? fatalFailure;
+  StackTrace? fatalFailureStack;
+  var invalidFirstParsedRecord = false;
+  var malformedLineCount = 0;
+  RandomAccessFile? handle;
+  try {
+    resolvedPath = _absolute(File(path).resolveSymbolicLinksSync());
+    final file = File(resolvedPath);
+    handle = file.openSync();
+    final decoder = _PiHistoryByteSink(
+      maxRecordBytes: PiSessionHistoryStorageApi.historyRecordByteLimit,
+        onLine: (line, {required isFinal}) {
+          if (line.trim().isEmpty) return;
+          try {
+            final json = jsonDecodeMap(line);
+            if (header == null) {
+              if (invalidFirstParsedRecord) return;
+              final type = json["type"];
+              final id = json["id"];
+              if (type != "session" || id is! String) {
+                invalidFirstParsedRecord = true;
+                throw const FormatException("Expected session header");
+              }
+              header = PiSessionFileHeaderDto.fromJson(json);
+              return;
+            }
+            entries.add(PiSessionFileEntryDto.fromJson(json));
+          } on Object catch (error, stackTrace) {
+            firstFailure ??= error;
+            firstFailureStack ??= stackTrace;
+            if (!isFinal) malformedLineCount += 1;
+          }
+        },
+    );
+    while (true) {
+      final bytes = handle.readSync(8192);
+      if (bytes.isEmpty) break;
+      decoder.add(bytes);
+    }
+    decoder.close();
+  } on Object catch (error, stackTrace) {
+    fatalFailure = error;
+    fatalFailureStack = stackTrace;
+  } finally {
+    handle?.closeSync();
+  }
+
+  final parsedHeader = header;
+  if (parsedHeader == null || fatalFailure != null) {
+    final cause = fatalFailure ?? firstFailure ?? const FormatException("Missing session header");
+    return _PiHistoryReadFailure(
+      path: resolvedPath,
+      error: PiInvalidSessionHistoryException(path: resolvedPath, cause: cause),
+      stackTrace: fatalFailureStack ?? firstFailureStack ?? StackTrace.current,
+      malformedLineCount: malformedLineCount,
+      firstMalformedRecordError: switch (firstFailure) {
+        final failure? => _PiHistoryRecordParseException(cause: failure),
+        null => null,
+      },
+      firstMalformedRecordStack: firstFailureStack,
+    );
+  }
+  return _PiHistoryReadSuccess(
+    path: resolvedPath,
+    history: PiSessionFileHistoryDto(
+      header: parsedHeader,
+      entries: List.unmodifiable(entries),
+    ),
+    malformedLineCount: malformedLineCount,
+    firstMalformedRecordError: switch (firstFailure) {
+      final failure? => _PiHistoryRecordParseException(cause: failure),
+      null => null,
+    },
+    firstMalformedRecordStack: firstFailureStack,
+  );
 }
 
 _PiScanResult _scanPiSessions({
@@ -739,6 +873,81 @@ final class const _PiScanResult({
   required final Map<String, String> pathsById,
   required final _PiScanDiagnostics diagnostics,
 });
+
+sealed class const _PiHistoryReadResult({
+  required final String path,
+  required final int malformedLineCount,
+  required final _PiHistoryRecordParseException? firstMalformedRecordError,
+  required final StackTrace? firstMalformedRecordStack,
+});
+
+final class const _PiHistoryReadSuccess({
+  required super.path,
+  required super.malformedLineCount,
+  required super.firstMalformedRecordError,
+  required super.firstMalformedRecordStack,
+  required final PiSessionFileHistoryDto history,
+}) extends _PiHistoryReadResult;
+
+final class const _PiHistoryReadFailure({
+  required super.path,
+  required super.malformedLineCount,
+  required super.firstMalformedRecordError,
+  required super.firstMalformedRecordStack,
+  required final PiInvalidSessionHistoryException error,
+  required final StackTrace stackTrace,
+}) extends _PiHistoryReadResult;
+
+final class const _PiHistoryRecordParseException({required final Object cause}) implements Exception {
+  @override
+  String toString() => "Invalid Pi session history record";
+}
+
+final class _PiHistoryByteSink({
+  required final int maxRecordBytes,
+  required void Function(String line, {required bool isFinal}) onLine,
+}) implements Sink<List<int>> {
+  final int _maxRecordBytes = maxRecordBytes;
+  final void Function(String line, {required bool isFinal}) _onLine = onLine;
+  BytesBuilder _pending = BytesBuilder(copy: false);
+
+  @override
+  void add(List<int> data) {
+    var start = 0;
+    while (true) {
+      final newline = data.indexOf(0x0A, start);
+      if (newline < 0) break;
+      _addSegment(data, start, newline);
+      _emit(isFinal: false);
+      start = newline + 1;
+    }
+    _addSegment(data, start, data.length);
+  }
+
+  @override
+  void close() {
+    if (_pending.length > 0) _emit(isFinal: true);
+  }
+
+  void _addSegment(List<int> data, int start, int end) {
+    final segmentLength = end - start;
+    if (_pending.length + segmentLength > _maxRecordBytes) {
+      throw const _PiHistoryRecordLimitException();
+    }
+    if (segmentLength > 0) _pending.add(data.sublist(start, end));
+  }
+
+  void _emit({required bool isFinal}) {
+    final bytes = _pending.takeBytes();
+    _pending = BytesBuilder(copy: false);
+    _onLine(utf8.decode(bytes, allowMalformed: false), isFinal: isFinal);
+  }
+}
+
+final class const _PiHistoryRecordLimitException() implements Exception {
+  @override
+  String toString() => "Pi session history record exceeds byte limit";
+}
 
 final class const _PiEffectiveDirectoryResult({
   required final String? path,
