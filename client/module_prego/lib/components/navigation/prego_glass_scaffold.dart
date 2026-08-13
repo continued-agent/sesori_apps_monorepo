@@ -452,10 +452,15 @@ class _PregoGlassScaffoldState() extends State<PregoGlassScaffold> {
             builder: (context, bannerHeight, _) => buildScaffold(bannerHeight),
           );
 
-    return _TopBarInsetScope(
-      baseInset: topPad + PregoTopNavigation.barHeight,
-      bannerHeight: _bannerHeight,
-      child: scaffold,
+    // Remove this wrapper once liquid_glass_widgets migrates from the Flutter SDK Material and Cupertino libraries to material_ui and cupertino_ui.
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      resizeToAvoidBottomInset: false,
+      body: _TopBarInsetScope(
+        baseInset: topPad + PregoTopNavigation.barHeight,
+        bannerHeight: _bannerHeight,
+        child: scaffold,
+      ),
     );
   }
 }
