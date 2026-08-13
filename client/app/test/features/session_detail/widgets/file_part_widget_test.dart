@@ -1,5 +1,7 @@
+import "dart:async";
 import "dart:convert";
 import "dart:typed_data";
+import "dart:ui" show SemanticsAction;
 
 import "package:flutter_bloc/flutter_bloc.dart";
 import "package:flutter_test/flutter_test.dart";
@@ -10,6 +12,7 @@ import "package:http/testing.dart";
 import "package:material_ui/material_ui.dart";
 import "package:mocktail/mocktail.dart";
 import "package:sesori_dart_core/sesori_dart_core.dart";
+import "package:sesori_mobile/features/session_detail/widgets/attachment_collection_widget.dart";
 import "package:sesori_mobile/features/session_detail/widgets/file_part_widget.dart";
 import "package:sesori_mobile/features/session_detail/widgets/image_attachment_viewer.dart";
 import "package:sesori_mobile/features/session_detail/widgets/tool_part_widget.dart";
@@ -25,6 +28,13 @@ class _MockSessionApi() extends Mock implements SessionApi;
 class _MockAuthSession() extends Mock implements AuthSession;
 
 class _MockAttachmentThumbnailStorage() extends Mock implements AttachmentThumbnailStorage;
+
+const _authUser = AuthUser(
+  id: "account-a",
+  provider: AuthProvider.github,
+  providerUserId: "provider-a",
+  providerUsername: "alice",
+);
 
 class _FakeImageSaver() implements ImageSaver {
   Uint8List? savedBytes;
@@ -64,9 +74,11 @@ class _FakeImageSharer() implements ImageSharer {
   }) async {}
 }
 
-Widget _app({required Widget child}) {
+Widget _app({required Widget child, ThemeMode themeMode = ThemeMode.light}) {
   return MaterialApp(
     theme: ThemeData(extensions: [PregoDesignSystem.light]),
+    darkTheme: ThemeData(extensions: [PregoDesignSystem.dark]),
+    themeMode: themeMode,
     localizationsDelegates: AppLocalizations.localizationsDelegates,
     supportedLocales: AppLocalizations.supportedLocales,
     home: Scaffold(body: child),
@@ -160,7 +172,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text("preview.png"), findsOneWidget);
-    expect(find.text("image/png"), findsOneWidget);
+    expect(find.text("image/png / 1024 bytes"), findsOneWidget);
     expect(find.byType(Image), findsNothing);
     expect(find.byKey(FilePartWidget.previewTapTargetKey), findsNothing);
   });
@@ -183,6 +195,263 @@ void main() {
     expect(image.image, isA<ResizeImage>());
     expect((image.image as ResizeImage).imageProvider, isA<MemoryImage>());
     verifyNever(() => urlLauncher.launch(any(), mode: any(named: "mode")));
+  });
+
+  testWidgets("lays out one two three and four attachments as capped square grids", (tester) async {
+    const attachments = [
+      MessageAttachment.metadata(mime: "image/png", filename: "one.png"),
+      MessageAttachment.metadata(mime: "image/png", filename: "two.png"),
+      MessageAttachment.metadata(mime: "image/png", filename: "three.png"),
+      MessageAttachment.metadata(mime: "image/png", filename: "four.png"),
+    ];
+
+    for (var count = 1; count <= attachments.length; count++) {
+      await tester.pumpWidget(
+        _app(
+          child: SizedBox(
+            width: 500,
+            child: AttachmentCollectionWidget(
+              sessionId: "session-1",
+              attachments: attachments.take(count).toList(),
+            ),
+          ),
+        ),
+      );
+
+      final collection = find.byType(AttachmentCollectionWidget);
+      expect(tester.getSize(find.byKey(AttachmentCollectionWidget.surfaceKey)).width, 320);
+      final tiles = find.descendant(of: collection, matching: find.byType(AspectRatio));
+      expect(tiles, findsNWidgets(count));
+      for (final tile in tester.widgetList<AspectRatio>(tiles)) {
+        expect(tile.aspectRatio, 1);
+      }
+      final firstSize = tester.getSize(tiles.at(0));
+      if (count.isOdd) {
+        expect(firstSize.width, 320);
+      } else {
+        expect(firstSize.width, closeTo(157, 0.01));
+      }
+      expect(tester.takeException(), isNull);
+    }
+  });
+
+  testWidgets("renders square metadata fallback with bounded overlay text", (tester) async {
+    const filename =
+        "a-very-long-attachment-filename-that-needs-to-stay-on-one-line-and-ellipsis-in-the-square-grid.png";
+    await tester.pumpWidget(
+      _app(
+        child: const SizedBox(
+          width: 180,
+          child: AttachmentCollectionWidget(
+            sessionId: "session-1",
+            attachments: [MessageAttachment.metadata(mime: "image/png", filename: filename)],
+          ),
+        ),
+      ),
+    );
+
+    final tile = find.descendant(
+      of: find.byType(AttachmentCollectionWidget),
+      matching: find.byType(AspectRatio),
+    );
+    expect(tester.getSize(tile), const Size(180, 180));
+    final filenameText = tester.widget<Text>(find.text(filename));
+    expect(filenameText.maxLines, 1);
+    expect(filenameText.overflow, TextOverflow.ellipsis);
+    expect(find.text("image/png"), findsOneWidget);
+  });
+
+  testWidgets("unknown attachments do not occupy collection slots", (tester) async {
+    const filename = "visible.png";
+    await tester.pumpWidget(
+      _app(
+        child: const SizedBox(
+          width: 320,
+          child: AttachmentCollectionWidget(
+            sessionId: "session-1",
+            attachments: [
+              MessageAttachment.metadata(mime: "image/png", filename: filename),
+              MessageAttachment.unknown(),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    final tile = find.descendant(
+      of: find.byType(AttachmentCollectionWidget),
+      matching: find.byType(AspectRatio),
+    );
+    expect(tile, findsOneWidget);
+    expect(tester.getSize(tile).width, 320);
+  });
+
+  testWidgets("fallback metadata is announced once", (tester) async {
+    final semantics = tester.ensureSemantics();
+    await tester.pumpWidget(
+      _app(
+        child: const FilePartWidget(
+          sessionId: "session-1",
+          attachment: MessageAttachment.metadata(mime: "application/pdf", filename: "report.pdf"),
+        ),
+      ),
+    );
+
+    expect(find.bySemanticsLabel("report.pdf"), findsOneWidget);
+    semantics.dispose();
+  });
+
+  testWidgets("extreme text scaling keeps metadata without overflowing", (tester) async {
+    await tester.pumpWidget(
+      _app(
+        child: const MediaQuery(
+          data: MediaQueryData(textScaler: TextScaler.linear(3)),
+          child: SizedBox(
+            width: 140,
+            child: FilePartWidget(
+              sessionId: "session-1",
+              attachment: MessageAttachment.metadata(
+                mime: "image/png",
+                filename: "scaled.png",
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text("scaled.png"), findsOneWidget);
+    expect(find.text("image/png"), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets("dark metadata overlay keeps secondary text light", (tester) async {
+    await tester.pumpWidget(
+      _app(
+        themeMode: ThemeMode.dark,
+        child: const FilePartWidget(
+          sessionId: "session-1",
+          attachment: MessageAttachment.metadata(mime: "image/png", filename: "dark.png"),
+        ),
+      ),
+    );
+
+    final details = tester.widget<Text>(find.text("image/png"));
+    expect(details.style?.color, PregoDesignSystem.dark.colors.textWhite.withValues(alpha: 0.7));
+  });
+
+  testWidgets("uses a static loading indicator when reduced motion is enabled", (tester) async {
+    const attachment = MessageAttachment.storedImage(
+      attachmentId: "loading",
+      bridgeId: "bridge-1",
+      mime: "image/png",
+      filename: "loading.png",
+      byteLength: 8,
+    );
+    when(() => authSession.currentState).thenReturn(const AuthState.authenticated(user: _authUser));
+    when(
+      () => thumbnailStorage.read(
+        scope: any(named: "scope"),
+        key: any(named: "key"),
+      ),
+    ).thenAnswer(
+      (_) async => null,
+    );
+    when(
+      () => sessionApi.getAttachment(
+        sessionId: "session-1",
+        attachmentId: "loading",
+        rendition: SessionAttachmentRendition.thumbnail,
+      ),
+    ).thenAnswer((_) => Completer<ApiResponse<SessionAttachmentResponse>>().future);
+    await GetIt.instance.unregister<MessageImageRepository>();
+    GetIt.instance.registerSingleton<MessageImageRepository>(
+      MessageImageRepository(
+        api: MessageImageApi(client: MockClient((_) async => throw StateError("unexpected"))),
+        sessionApi: sessionApi,
+        authSession: authSession,
+        attachmentThumbnailStorage: thumbnailStorage,
+      ),
+    );
+
+    await tester.pumpWidget(
+      MediaQuery(
+        data: const MediaQueryData(disableAnimations: true),
+        child: _app(
+          child: const SizedBox(
+            width: 160,
+            child: FilePartWidget(sessionId: "session-1", attachment: attachment),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    final indicator = tester.widget<CircularProgressIndicator>(find.byType(CircularProgressIndicator));
+    expect(indicator.value, isNotNull);
+    expect(find.byType(AspectRatio), findsOneWidget);
+    expect(find.text("image/png / 8 bytes"), findsOneWidget);
+  });
+
+  testWidgets("failed raster tile exposes retry semantics and retries the request", (tester) async {
+    var requests = 0;
+    await GetIt.instance.unregister<MessageImageRepository>();
+    GetIt.instance.registerSingleton<MessageImageRepository>(
+      MessageImageRepository(
+        api: MessageImageApi(
+          client: MockClient((_) async {
+            requests++;
+            return http.Response("failed", 500);
+          }),
+        ),
+        sessionApi: sessionApi,
+        authSession: authSession,
+        attachmentThumbnailStorage: thumbnailStorage,
+      ),
+    );
+    const attachment = MessageAttachment.remoteUrl(
+      mime: "image/png",
+      url: "https://files.example.com/retry.png",
+      filename: "retry.png",
+    );
+    final semantics = tester.ensureSemantics();
+
+    await tester.pumpWidget(
+      _app(
+        child: const SizedBox(
+          width: 160,
+          child: FilePartWidget(sessionId: "session-1", attachment: attachment),
+        ),
+      ),
+    );
+    await tester.runAsync(() async {
+      while (requests < 1) {
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+      }
+    });
+    await tester.pump();
+    expect(requests, 1);
+    expect(find.text("Retry"), findsOneWidget);
+    expect(find.byIcon(Icons.open_in_new), findsOneWidget);
+    expect(tester.getSemantics(find.text("Retry")).getSemanticsData().hasAction(SemanticsAction.tap), isTrue);
+
+    await tester.tapAt(const Offset(12, 12));
+    await tester.pump();
+    verify(
+      () => urlLauncher.launch(Uri.parse("https://files.example.com/retry.png"), mode: UrlLaunchMode.externalApp),
+    ).called(1);
+
+    await tester.tap(find.text("Retry"));
+    await tester.runAsync(() async {
+      while (requests < 2) {
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+      }
+    });
+    await tester.pump();
+    expect(requests, 2);
+    semantics.dispose();
   });
 
   testWidgets("opens inline images in a zoomable Hero viewer using the same provider", (tester) async {
@@ -561,16 +830,20 @@ void main() {
     verifyNever(() => urlLauncher.launch(any(), mode: any(named: "mode")));
   });
 
-  testWidgets("does not open viewer actions for corrupt image bytes", (tester) async {
+  testWidgets("corrupt image bytes expose retry without opening the viewer", (tester) async {
+    var requests = 0;
     await GetIt.instance.unregister<MessageImageRepository>();
     GetIt.instance.registerSingleton<MessageImageRepository>(
       MessageImageRepository(
         api: MessageImageApi(
           client: MockClient(
-            (_) async => http.Response.bytes(
-              Uint8List.fromList(const [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]),
-              200,
-            ),
+            (_) async {
+              requests++;
+              return http.Response.bytes(
+                Uint8List.fromList(const [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]),
+                200,
+              );
+            },
           ),
         ),
         sessionApi: sessionApi,
@@ -595,6 +868,15 @@ void main() {
 
     expect(find.byType(ImageAttachmentViewer), findsNothing);
     expect(find.byIcon(Icons.broken_image), findsOneWidget);
+    expect(find.text("Retry"), findsOneWidget);
+    final requestsAfterTap = requests;
+    await tester.tap(find.text("Retry"));
+    await tester.runAsync(() async {
+      while (requests <= requestsAfterTap) {
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+      }
+    });
+    expect(requests, greaterThan(requestsAfterTap));
     expect(tester.takeException(), isNull);
   });
 
@@ -647,6 +929,7 @@ void main() {
 
     expect(find.text("broken.png"), findsOneWidget);
     expect(find.byIcon(Icons.broken_image), findsOneWidget);
+    expect(find.text("Retry"), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
