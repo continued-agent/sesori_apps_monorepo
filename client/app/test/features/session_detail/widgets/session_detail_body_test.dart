@@ -271,6 +271,32 @@ void main() {
     expect(find.text("No messages yet"), findsOneWidget);
   });
 
+  testWidgets("composer fade obscures transcript text behind floating controls", (tester) async {
+    final state = _loadedState(pendingQuestions: const [], pendingPermissions: const []);
+    when(() => cubit.state).thenReturn(state);
+    whenListen(cubit, const Stream<SessionDetailState>.empty(), initialState: state);
+
+    await tester.pumpWidget(_buildApp(cubit: cubit));
+    await tester.pumpAndSettle();
+
+    final decoratedBox = tester.widget<DecoratedBox>(
+      find.descendant(
+        of: find.byType(PromptInput),
+        matching: find.byWidgetPredicate(
+          (widget) =>
+              widget is DecoratedBox &&
+              widget.decoration is BoxDecoration &&
+              (widget.decoration as BoxDecoration).gradient is LinearGradient,
+        ),
+      ).first,
+    );
+    final gradient = (decoratedBox.decoration as BoxDecoration).gradient! as LinearGradient;
+    final surface = PregoDesignSystem.light.colors.bgSurface1;
+    expect(gradient.colors[0], surface.withValues(alpha: 0.98));
+    expect(gradient.colors[1], surface.withValues(alpha: 0.88));
+    expect(gradient.colors[2], surface.withValues(alpha: 0));
+  });
+
   testWidgets("an empty newest page keeps older transcript paging reachable", (tester) async {
     final state = _loadedState(pendingQuestions: const [], pendingPermissions: const []).copyWith(
       olderMessagesCursor: 42,
