@@ -71,6 +71,7 @@ void main() {
       final result = await repo.getProjects();
 
       expect(plugin.getProjectsCallCount, 0);
+      expect(result, everyElement(isA<ProjectSummary>()));
       final rows = await db.select(db.projectsTable).get();
       expect(
         rows.map((r) => r.projectId).toSet(),
@@ -333,14 +334,16 @@ void main() {
       expect(plugin.getProjectsCallCount, 0);
     });
 
-    test("project list and detail complete while plugin reads never complete", () async {
+    test("project list and detail complete independently while plugin reads never complete", () async {
       plugin.getProjectsFuture = Completer<List<PluginProject>>().future;
       await db.projectsDao.setActivity(projectId: "stored", createdAt: 1, updatedAt: 2);
 
       final projects = await repo.getProjects().timeout(const Duration(seconds: 1));
       final project = await repo.getProject(projectId: "stored").timeout(const Duration(seconds: 1));
 
-      expect(projects.single, project);
+      expect(projects.single.id, project.id);
+      expect(projects.single.path, project.path);
+      expect(project.supportsDedicatedWorktrees, isFalse);
       expect(plugin.getProjectsCallCount, 0);
       expect(plugin.lastGetProjectId, isNull);
     });
@@ -406,7 +409,7 @@ void main() {
       expect(result.single.time, const ProjectTime(created: 10, updated: 20));
     });
 
-    test("getProjects reuses an available Git worktree inspection slot", () async {
+    test("getProjects makes no filesystem or Git calls", () async {
       final paths = [
         for (var index = 0; index < 9; index++) "/project-${index.toString().padLeft(2, "0")}",
       ];
@@ -417,103 +420,22 @@ void main() {
           updatedAt: paths.length - index,
         );
       }
-      final gitCliApi = _BlockingGitCliApi();
-      final boundedRepo = singlePluginProjectRepository(
+      final gitCliApi = _RecordingGitCliApi();
+      final filesystemApi = _RecordingFilesystemApi();
+      final catalogRepo = singlePluginProjectRepository(
         gitCliApi: gitCliApi,
         projectsDao: db.projectsDao,
         sessionDao: db.sessionDao,
         unseenCalculator: const SessionUnseenCalculator(),
-        filesystemApi: FakeFilesystemApi(),
+        filesystemApi: filesystemApi,
       );
 
-      final listing = boundedRepo.getProjects();
-      await gitCliApi.inspectionLimitReached.future.timeout(const Duration(seconds: 1));
+      final projects = await catalogRepo.getProjects();
 
-      expect(gitCliApi.inspectedPaths, paths.take(8));
-      expect(gitCliApi.nextInspectionStarted.isCompleted, isFalse);
-      gitCliApi.completeFirst(result: true);
-
-      await gitCliApi.nextInspectionStarted.future.timeout(const Duration(seconds: 1));
-      expect(gitCliApi.inspectedPaths, paths);
-      expect(gitCliApi.activeInspections, 8);
-      gitCliApi.releaseAll(result: true);
-
-      final projects = await listing;
       expect(projects.map((project) => project.path), paths);
-      expect(projects.every((project) => project.supportsDedicatedWorktrees), isTrue);
-      expect(gitCliApi.maximumActiveInspections, 8);
-    });
-
-    test("concurrent project listings share the Git worktree inspection limit", () async {
-      final paths = [
-        for (var index = 0; index < 9; index++) "/project-${index.toString().padLeft(2, "0")}",
-      ];
-      for (final (index, path) in paths.indexed) {
-        await db.projectsDao.setActivity(
-          projectId: path,
-          createdAt: 1,
-          updatedAt: paths.length - index,
-        );
-      }
-      final gitCliApi = _BlockingGitCliApi();
-      final boundedRepo = singlePluginProjectRepository(
-        gitCliApi: gitCliApi,
-        projectsDao: db.projectsDao,
-        sessionDao: db.sessionDao,
-        unseenCalculator: const SessionUnseenCalculator(),
-        filesystemApi: FakeFilesystemApi(),
-      );
-
-      final listings = Future.wait([boundedRepo.getProjects(), boundedRepo.getProjects()]);
-      await gitCliApi.inspectionLimitReached.future.timeout(const Duration(seconds: 1));
-      await Future<void>.delayed(Duration.zero);
-
-      expect(gitCliApi.activeInspections, 8);
-      expect(gitCliApi.maximumActiveInspections, 8);
-      gitCliApi.releaseAll(result: true);
-
-      final results = await listings;
-      expect(results, everyElement(hasLength(paths.length)));
-      expect(gitCliApi.inspectedPaths, hasLength(paths.length * 2));
-      expect(gitCliApi.maximumActiveInspections, 8);
-    });
-
-    test("a single-project probe gets the next slot during a large listing", () async {
-      final paths = [
-        for (var index = 0; index < 17; index++) "/project-${index.toString().padLeft(2, "0")}",
-      ];
-      for (final (index, path) in paths.indexed) {
-        await db.projectsDao.setActivity(
-          projectId: path,
-          createdAt: 1,
-          updatedAt: paths.length - index,
-        );
-      }
-      final gitCliApi = _BlockingGitCliApi();
-      final projectsDao = _SignalingProjectsDao(database: db);
-      final boundedRepo = singlePluginProjectRepository(
-        gitCliApi: gitCliApi,
-        projectsDao: projectsDao,
-        sessionDao: db.sessionDao,
-        unseenCalculator: const SessionUnseenCalculator(),
-        filesystemApi: FakeFilesystemApi(),
-      );
-
-      final listing = boundedRepo.getProjects();
-      await gitCliApi.inspectionLimitReached.future.timeout(const Duration(seconds: 1));
-      final detail = boundedRepo.resolveProjectOpenTarget(path: "/priority-project");
-      await projectsDao.allProjectsRead.future.timeout(const Duration(seconds: 1));
-      await Future<void>.delayed(Duration.zero);
-      gitCliApi.completeFirst(result: true);
-      await gitCliApi.nextInspectionStarted.future.timeout(const Duration(seconds: 1));
-
-      expect(gitCliApi.inspectedPaths[8], "/priority-project");
-      expect(gitCliApi.maximumActiveInspections, 8);
-      gitCliApi.releaseAll(result: true);
-
-      expect((await detail).supportsDedicatedWorktrees, isTrue);
-      expect(await listing, hasLength(paths.length));
-      expect(gitCliApi.maximumActiveInspections, 8);
+      expect(filesystemApi.directoryExistsCallCount, 0);
+      expect(gitCliApi.isGitInitializedCallCount, 0);
+      expect(gitCliApi.hasAtLeastOneCommitCallCount, 0);
     });
 
     test("getProjects breaks equal timestamps by project id descending", () async {
@@ -763,37 +685,6 @@ void main() {
         expect(plugin.lastGetProjectId, isNull);
       });
 
-      test("getProjects computes directoryMissing against the live path, not the id", () async {
-        plugin.projectResult = const PluginProject(id: "/projects/a", directory: "/moved/a", name: "A");
-        plugin.projectsResult = const [
-          PluginProject(id: "/projects/a", directory: "/projects/a", name: "A"),
-        ];
-        final repoWithMissing = singlePluginProjectRepository(
-          gitCliApi: FakeGitCliApi(),
-          projectsDao: db.projectsDao,
-          sessionDao: db.sessionDao,
-          unseenCalculator: const SessionUnseenCalculator(),
-          // The original location is gone; the folder lives at /moved/a now.
-          filesystemApi: FakeFilesystemApi(missingPaths: {"/projects/a"}),
-        );
-        await db.projectsDao.recordOpenedProject(
-          projectId: "/projects/a",
-          path: "/moved/a",
-          displayName: null,
-          createdAt: 1,
-          updatedAt: 1,
-        );
-        final target = await repoWithMissing.resolveProjectOpenTarget(path: "/moved/a");
-        await repoWithMissing.persistOpenedProject(
-          target: target,
-          observedAt: 1,
-        );
-
-        final result = await repoWithMissing.getProjects();
-
-        expect(result.firstWhere((p) => p.id == "/projects/a").directoryMissing, isFalse);
-      });
-
       test("getProject and renameProject are catalog-only for a moved aggregate project", () async {
         plugin.projectResult = const PluginProject(id: "/projects/a", directory: "/moved/a", name: "A");
         await db.projectsDao.recordOpenedProject(
@@ -874,35 +765,6 @@ void main() {
       expect(stored, equals("main"));
     });
 
-    test("getProjects leaves directoryMissing false without filesystem probes", () async {
-      plugin.projectsResult = const [
-        PluginProject(id: "/present", directory: "/present", name: "Present"),
-        PluginProject(id: "/moved", directory: "/moved", name: "Moved"),
-      ];
-      final repoWithMissing = singlePluginProjectRepository(
-        gitCliApi: FakeGitCliApi(),
-        projectsDao: db.projectsDao,
-        sessionDao: db.sessionDao,
-        unseenCalculator: const SessionUnseenCalculator(),
-        filesystemApi: FakeFilesystemApi(missingPaths: {"/moved"}),
-      );
-      await db.projectsDao.setActivity(
-        projectId: "/present",
-        createdAt: 0,
-        updatedAt: 2,
-      );
-      await db.projectsDao.setActivity(
-        projectId: "/moved",
-        createdAt: 0,
-        updatedAt: 1,
-      );
-
-      final result = await repoWithMissing.getProjects();
-
-      expect(result.firstWhere((p) => p.id == "/present").directoryMissing, isFalse);
-      expect(result.firstWhere((p) => p.id == "/moved").directoryMissing, isFalse);
-    });
-
     test("getProject leaves directoryMissing false without a filesystem probe", () async {
       plugin.projectResult = const PluginProject(id: "/gone", directory: "/gone", name: "Gone");
       await db.projectsDao.insertProjectsIfMissing(projectIds: ["/gone"]);
@@ -920,19 +782,58 @@ void main() {
       expect(plugin.lastGetProjectId, isNull);
     });
 
-    test("a directory whose existence probe throws is treated as present, not missing", () async {
-      await db.projectsDao.setActivity(projectId: "/denied", createdAt: 1, updatedAt: 2);
-      final repoWithThrow = singlePluginProjectRepository(
-        gitCliApi: FakeGitCliApi(),
+    test("getProject propagates Git capability inspection failures", () async {
+      await db.projectsDao.setActivity(projectId: "/broken", createdAt: 1, updatedAt: 2);
+      final inspectionError = StateError("Git inspection failed");
+      final repoWithFailure = singlePluginProjectRepository(
+        gitCliApi: _ThrowingGitCliApi(error: inspectionError),
         projectsDao: db.projectsDao,
         sessionDao: db.sessionDao,
         unseenCalculator: const SessionUnseenCalculator(),
-        filesystemApi: FakeFilesystemApi(throwingPaths: {"/denied"}),
+        filesystemApi: FakeFilesystemApi(),
       );
 
-      final result = await repoWithThrow.getProjects();
+      await expectLater(
+        repoWithFailure.getProject(projectId: "/broken"),
+        throwsA(same(inspectionError)),
+      );
+    });
 
-      expect(result.single.directoryMissing, isFalse);
+    test("resolveProjectOpenTarget recovers Git capability inspection failures", () async {
+      final repoWithFailure = singlePluginProjectRepository(
+        gitCliApi: _ThrowingGitCliApi(error: StateError("Git inspection failed")),
+        projectsDao: db.projectsDao,
+        sessionDao: db.sessionDao,
+        unseenCalculator: const SessionUnseenCalculator(),
+        filesystemApi: FakeFilesystemApi(),
+      );
+
+      final project = await repoWithFailure.resolveProjectOpenTarget(path: "/new-project");
+
+      expect(project.supportsDedicatedWorktrees, isFalse);
+    });
+
+    test("renameProject recovers Git capability inspection failures", () async {
+      await db.projectsDao.setActivity(projectId: "/broken", createdAt: 1, updatedAt: 2);
+      await db.projectsDao.setDisplayName(
+        projectId: "/broken",
+        displayName: "Original",
+        updatedAt: 2,
+      );
+      final inspectionError = StateError("Git inspection failed");
+      final repoWithFailure = singlePluginProjectRepository(
+        gitCliApi: _ThrowingGitCliApi(error: inspectionError),
+        projectsDao: db.projectsDao,
+        sessionDao: db.sessionDao,
+        unseenCalculator: const SessionUnseenCalculator(),
+        filesystemApi: FakeFilesystemApi(),
+      );
+
+      final renamed = await repoWithFailure.renameProject(projectId: "/broken", name: "Renamed");
+
+      expect(renamed.name, "Renamed");
+      expect(renamed.supportsDedicatedWorktrees, isFalse);
+      expect((await db.projectsDao.getProject(projectId: "/broken"))?.displayName, "Renamed");
     });
   });
 
@@ -1217,34 +1118,6 @@ void main() {
       expect(result.single.time?.updated, persistedActivity!.updatedAt);
     });
 
-    test("getProjects does not probe catalog project directories", () async {
-      plugin.sessions = [
-        _session("/tmp/proj/alpha", id: "a1", created: 1, updated: 2),
-        _session("/tmp/proj/beta", id: "b1", created: 1, updated: 1),
-      ];
-      final repoWithMissing = singlePluginProjectRepository(
-        gitCliApi: FakeGitCliApi(),
-        projectsDao: db.projectsDao,
-        sessionDao: db.sessionDao,
-        unseenCalculator: const SessionUnseenCalculator(),
-        filesystemApi: FakeFilesystemApi(missingPaths: {"/tmp/proj/beta"}),
-      );
-      await db.projectsDao.setActivity(
-        projectId: "/tmp/proj/alpha",
-        createdAt: 1,
-        updatedAt: 2,
-      );
-      await db.projectsDao.setActivity(
-        projectId: "/tmp/proj/beta",
-        createdAt: 1,
-        updatedAt: 1,
-      );
-
-      final result = await repoWithMissing.getProjects();
-
-      expect(result.firstWhere((p) => p.id == "/tmp/proj/alpha").directoryMissing, isFalse);
-      expect(result.firstWhere((p) => p.id == "/tmp/proj/beta").directoryMissing, isFalse);
-    });
   });
 
   group("ProjectRepository getRemoteIdentity", () {
@@ -1544,16 +1417,13 @@ class _CountingProjectsDao({required AppDatabase database}) extends ProjectsDao 
   }
 }
 
-class _SignalingProjectsDao({required AppDatabase database}) extends ProjectsDao {
-  this : super(database);
-
-  final Completer<void> allProjectsRead = Completer<void>();
+class _RecordingFilesystemApi() extends FakeFilesystemApi {
+  int directoryExistsCallCount = 0;
 
   @override
-  Future<List<ProjectDto>> getAllProjects() async {
-    final projects = await super.getAllProjects();
-    allProjectsRead.complete();
-    return projects;
+  bool directoryExists(String path) {
+    directoryExistsCallCount++;
+    return super.directoryExists(path);
   }
 }
 
@@ -1574,49 +1444,24 @@ class _BlockingSnapshotProjectsDao({required AppDatabase database}) extends Proj
   }
 }
 
-class _BlockingGitCliApi() extends FakeGitCliApi {
-  final List<String> inspectedPaths = [];
-  final Completer<void> inspectionLimitReached = Completer<void>();
-  final Completer<void> nextInspectionStarted = Completer<void>();
-  final List<Completer<bool>> _pending = [];
-  bool _released = false;
-  int activeInspections = 0;
-  int maximumActiveInspections = 0;
+class _RecordingGitCliApi() extends FakeGitCliApi {
+  int isGitInitializedCallCount = 0;
+  int hasAtLeastOneCommitCallCount = 0;
 
   @override
-  Future<bool> isGitInitialized({required String projectPath}) async => true;
+  Future<bool> isGitInitialized({required String projectPath}) async {
+    isGitInitializedCallCount++;
+    return true;
+  }
 
   @override
   Future<bool> hasAtLeastOneCommit({required String projectPath}) async {
-    inspectedPaths.add(projectPath);
-    activeInspections++;
-    if (activeInspections > maximumActiveInspections) {
-      maximumActiveInspections = activeInspections;
-    }
-    if (inspectedPaths.length == 8) inspectionLimitReached.complete();
-    if (inspectedPaths.length == 9) nextInspectionStarted.complete();
-    if (_released) {
-      activeInspections--;
-      return true;
-    }
-    final completer = Completer<bool>();
-    _pending.add(completer);
-    try {
-      return await completer.future;
-    } finally {
-      activeInspections--;
-    }
+    hasAtLeastOneCommitCallCount++;
+    return true;
   }
+}
 
-  void completeFirst({required bool result}) {
-    _pending.removeAt(0).complete(result);
-  }
-
-  void releaseAll({required bool result}) {
-    _released = true;
-    for (final completer in _pending) {
-      completer.complete(result);
-    }
-    _pending.clear();
-  }
+class _ThrowingGitCliApi({required final Object error}) extends FakeGitCliApi {
+  @override
+  Future<bool> isGitInitialized({required String projectPath}) async => throw error;
 }
