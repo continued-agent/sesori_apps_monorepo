@@ -15,7 +15,6 @@ import "package:theme_prego/module_prego.dart";
 
 import "../../../capabilities/media/composer_image_picker.dart";
 import "../../../capabilities/voice/voice_transcription_service.dart";
-import "../../../core/constants.dart";
 import "../../../core/di/injection.dart";
 import "../../../core/extensions/build_context_x.dart";
 import "../../../core/widgets/command_picker_sheet.dart";
@@ -75,13 +74,12 @@ final class _ComposerPasteAction({
   bool consumesKey(PasteTextIntent intent) => callingAction?.consumesKey(intent) ?? false;
 }
 
-typedef PromptSubmitCallback =
-    void Function({
-      required String text,
-      required String? command,
-      required ComposerInputMode inputMode,
-      required List<ComposerAttachment> attachments,
-    });
+typedef PromptSubmitCallback = void Function({
+  required String text,
+  required String? command,
+  required ComposerInputMode inputMode,
+  required List<ComposerAttachment> attachments,
+});
 
 class const PromptInput({
     super.key,
@@ -603,7 +601,10 @@ class _PromptInputState() extends State<PromptInput> {
       // killing voice input for the rest of the session.
       loge("Failed to start recording", error);
       if (!mounted) return;
-      _showComposerNotice(context.loc.voiceErrorRecording);
+      _showComposerNotice(
+        context.loc.voiceErrorRecording,
+        variant: PregoPopupAlertsNotificationsVariant.error,
+      );
     }
   }
 
@@ -650,14 +651,23 @@ class _PromptInputState() extends State<PromptInput> {
       // User cancelled — nothing to do, finally resets state.
     } on NotAuthenticatedVoiceError {
       if (!mounted || stale()) return;
-      _showComposerNotice(context.loc.voiceErrorNotAuthenticated);
+      _showComposerNotice(
+        context.loc.voiceErrorNotAuthenticated,
+        variant: PregoPopupAlertsNotificationsVariant.error,
+      );
     } on NetworkVoiceError {
       if (!mounted || stale()) return;
-      _showComposerNotice(context.loc.voiceErrorNetwork);
+      _showComposerNotice(
+        context.loc.voiceErrorNetwork,
+        variant: PregoPopupAlertsNotificationsVariant.error,
+      );
     } on VoiceTranscriptionError catch (error) {
       loge("Transcription failed", error);
       if (!mounted || stale()) return;
-      _showComposerNotice(context.loc.voiceErrorTranscription);
+      _showComposerNotice(
+        context.loc.voiceErrorTranscription,
+        variant: PregoPopupAlertsNotificationsVariant.error,
+      );
     } finally {
       if (!stale()) {
         _updateComposerState(
@@ -754,26 +764,21 @@ class _PromptInputState() extends State<PromptInput> {
     }
   }
 
-  void _showComposerNotice(String message) {
-    ScaffoldMessenger.of(context)
-      ..clearSnackBars()
-      ..showSnackBar(
-        SnackBar(
-          content: Text(message),
-          duration: kSnackBarDuration,
-        ),
-      );
+  void _showComposerNotice(
+    String message, {
+    PregoPopupAlertsNotificationsVariant variant = PregoPopupAlertsNotificationsVariant.warning,
+  }) {
+    PregoPopupAlertPresenter.of(context).show(
+      title: message,
+      variant: variant,
+    );
   }
 
   void _showRecordingLimitReached() {
-    ScaffoldMessenger.of(context)
-      ..clearSnackBars()
-      ..showSnackBar(
-        SnackBar(
-          content: Text(context.loc.voiceRecordingLimitReached),
-          duration: kSnackBarDuration,
-        ),
-      );
+    PregoPopupAlertPresenter.of(context).show(
+      title: context.loc.voiceRecordingLimitReached,
+      variant: PregoPopupAlertsNotificationsVariant.warning,
+    );
   }
 
   Future<void> _openCommandPicker() async {

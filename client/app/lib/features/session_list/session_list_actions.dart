@@ -45,9 +45,10 @@ Future<void> _archiveSession({
   if (!context.mounted) return;
 
   if (success) {
-    ScaffoldMessenger.of(context)
-      ..clearSnackBars()
-      ..showSnackBar(SnackBar(content: Text(loc.sessionListArchived)));
+    PregoPopupAlertPresenter.of(context).show(
+      title: loc.sessionListArchived,
+      variant: PregoPopupAlertsNotificationsVariant.success,
+    );
     return;
   }
 
@@ -63,9 +64,10 @@ Future<void> _archiveSession({
       deleteWorktree: deleteWorktree,
     );
   } else {
-    ScaffoldMessenger.of(context)
-      ..clearSnackBars()
-      ..showSnackBar(SnackBar(content: Text(loc.sessionListArchiveFailed)));
+    PregoPopupAlertPresenter.of(context).show(
+      title: loc.sessionListArchiveFailed,
+      variant: PregoPopupAlertsNotificationsVariant.error,
+    );
   }
 }
 
@@ -115,9 +117,10 @@ Future<void> _deleteSession({
   if (!context.mounted) return;
 
   if (success) {
-    ScaffoldMessenger.of(context)
-      ..clearSnackBars()
-      ..showSnackBar(SnackBar(content: Text(loc.sessionListDeleted)));
+    PregoPopupAlertPresenter.of(context).show(
+      title: loc.sessionListDeleted,
+      variant: PregoPopupAlertsNotificationsVariant.success,
+    );
     _closeDeletedSessionRoute(context: context, sessionId: sessionId);
     return;
   }
@@ -134,9 +137,10 @@ Future<void> _deleteSession({
       deleteWorktree: deleteWorktree,
     );
   } else {
-    ScaffoldMessenger.of(context)
-      ..clearSnackBars()
-      ..showSnackBar(SnackBar(content: Text(loc.sessionListDeleteFailed)));
+    PregoPopupAlertPresenter.of(context).show(
+      title: loc.sessionListDeleteFailed,
+      variant: PregoPopupAlertsNotificationsVariant.error,
+    );
   }
 }
 

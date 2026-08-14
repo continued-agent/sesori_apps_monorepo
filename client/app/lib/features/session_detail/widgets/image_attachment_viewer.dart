@@ -59,8 +59,7 @@ Future<void> showImageAttachmentViewer({
     opaque: false,
     transitionDuration: const Duration(milliseconds: 260),
     reverseTransitionDuration: const Duration(milliseconds: 220),
-    pageBuilder: (_, _, _) => ScaffoldMessenger(
-      child: switch (image) {
+    pageBuilder: (_, _, _) => switch (image) {
         LoadedMessageImage() => ImageAttachmentViewer(
           image: image,
           filename: filename,
@@ -81,7 +80,6 @@ Future<void> showImageAttachmentViewer({
           heroTag: heroTag,
         ),
       },
-    ),
     transitionsBuilder: (_, animation, _, child) => FadeTransition(opacity: animation, child: child),
   );
   var shouldDismissViewerWithHistory = true;
@@ -463,17 +461,36 @@ class _ImageAttachmentViewerState() extends State<ImageAttachmentViewer> with Ti
   }
 
   void _handleActionState({required BuildContext context, required ImageAttachmentActionsState state}) {
-    final message = switch (state) {
-      ImageAttachmentSaved() => context.loc.sessionDetailImageSaved,
-      ImageAttachmentCopied() => context.loc.sessionDetailImageCopied,
-      ImageAttachmentSaveAccessDenied() => context.loc.sessionDetailImageSaveAccessDenied,
-      ImageAttachmentCopyFailed() => context.loc.sessionDetailImageCopyFailed,
-      ImageAttachmentShareFailed() => context.loc.sessionDetailImageShareFailed,
-      ImageAttachmentSaveFailed() => context.loc.sessionDetailImageSaveFailed,
+    final alert = switch (state) {
+      ImageAttachmentSaved() => (
+        context.loc.sessionDetailImageSaved,
+        PregoPopupAlertsNotificationsVariant.success,
+      ),
+      ImageAttachmentCopied() => (
+        context.loc.sessionDetailImageCopied,
+        PregoPopupAlertsNotificationsVariant.success,
+      ),
+      ImageAttachmentSaveAccessDenied() => (
+        context.loc.sessionDetailImageSaveAccessDenied,
+        PregoPopupAlertsNotificationsVariant.warning,
+      ),
+      ImageAttachmentCopyFailed() => (
+        context.loc.sessionDetailImageCopyFailed,
+        PregoPopupAlertsNotificationsVariant.error,
+      ),
+      ImageAttachmentShareFailed() => (
+        context.loc.sessionDetailImageShareFailed,
+        PregoPopupAlertsNotificationsVariant.error,
+      ),
+      ImageAttachmentSaveFailed() => (
+        context.loc.sessionDetailImageSaveFailed,
+        PregoPopupAlertsNotificationsVariant.error,
+      ),
       ImageAttachmentActionsIdle() || ImageAttachmentActionRunning() => null,
     };
-    if (message == null) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    if (alert == null) return;
+    final (message, variant) = alert;
+    PregoPopupAlertPresenter.of(context).show(title: message, variant: variant);
     context.read<ImageAttachmentActionsCubit>().outcomeHandled();
   }
 
