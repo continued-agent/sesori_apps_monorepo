@@ -3,9 +3,9 @@
 ## Current State
 
 - **Plan slug:** `pi-harness`
-- **Implementation base:** current `origin/main` with Step 12 merged
-- **Series state:** Step 12/21 merged; Step 13/21 in PR
-- **Current step:** 13/21, Pi extension dialogs
+- **Implementation base:** current `origin/main` with Step 13 merged
+- **Series state:** Step 13/21 merged; Step 14/21 in PR
+- **Current step:** 14/21, Pi session residency and turns
 - **Plan PR:** https://github.com/sesori-ai/sesori_apps_monorepo/pull/811
 - **Step 2 PR:** https://github.com/sesori-ai/sesori_apps_monorepo/pull/819
 - **Step 3 PR:** https://github.com/sesori-ai/sesori_apps_monorepo/pull/820
@@ -20,7 +20,8 @@
 - **Step 11 PR:** https://github.com/sesori-ai/sesori_apps_monorepo/pull/892
 - **Step 12 PR:** https://github.com/sesori-ai/sesori_apps_monorepo/pull/905
 - **Step 13 PR:** https://github.com/sesori-ai/sesori_apps_monorepo/pull/910
-- **Next action:** monitor the Step 13 PR while starting Step 14 locally
+- **Step 14 PR:** https://github.com/sesori-ai/sesori_apps_monorepo/pull/914
+- **Next action:** monitor the Step 14 PR while starting Step 15 locally
 
 ## Locked Decisions
 
@@ -59,8 +60,8 @@ binary install. `OMP_PROTOCOL.md` records the supporting evidence.
 | [x] | 10/21 | `🚧 [pi-harness] feat(pi): enumerate persisted sessions [step 10/21]` | 1,000-1,400 (recorded overage) | Merged as PR #884 |
 | [x] | 11/21 | `⚙️ [pi-harness] feat(pi): replay Pi session history [step 11/21]` | 1,100-1,500 (recorded overage) | Merged as PR #892 |
 | [x] | 12/21 | `🚧 [pi-harness] feat(pi): map live messages and tools [step 12/21]` | 1,200-1,500 (recorded overage) | Merged as PR #905 |
-| [ ] | 13/21 | `⚙️ [pi-harness] feat(pi): bridge extension dialogs [step 13/21]` | 900-1,300 | PR #910 open |
-| [ ] | 14/21 | `🚧 [pi-harness] feat(pi): manage session residency and turns [step 14/21]` | 1,200-1,500 | Not started |
+| [x] | 13/21 | `⚙️ [pi-harness] feat(pi): bridge extension dialogs [step 13/21]` | 900-1,300 | Merged as PR #910 |
+| [ ] | 14/21 | `🚧 [pi-harness] feat(pi): manage session residency and turns [step 14/21]` | 1,200-1,500 (recorded overage) | PR #914 open |
 | [ ] | 15/21 | `⚙️ [pi-harness] feat(pi): expose models and commands [step 15/21]` | 900-1,300 | Not started |
 | [ ] | 16/21 | `🚧 [pi-harness] feat(pi): implement the plugin API [step 16/21]` | 1,100-1,500 | Not started |
 | [ ] | 17/21 | `🚧 [pi-harness] feat(pi): add managed runtime and lifecycle [step 17/21]` | 1,100-1,500 | Not started; runtime dependency merged |
@@ -423,6 +424,45 @@ binary install. `OMP_PROTOCOL.md` records the supporting evidence.
 - No current user-visible, database, persisted-data, analytics, or registered
   plugin impact; Pi remains app-invisible until Step 18.
 - Diff: +1,003/-7 = 1,010 changed lines; generated lines: 0; tests run: 170.
+
+### Step 14/21
+
+- Added persistent pending-new markers, secure caller-owned IDs, one
+  generation-fenced resident RPC client per active session, replay hydration
+  before frame attachment, merged tagged frame/exit streams, and resident or
+  transient history/rename leases.
+- Added per-session prompt lanes with immediate admission, selection-before-
+  prompt ordering, same-session FIFO and cross-session concurrency, dialog-first
+  command acceptance, correlated response/event settlement, no-run state
+  barriers, failed-response/exit settlement, abort teardown, idle reap, and
+  idempotent disposal.
+- Added strict bounded inline image validation and visible privacy-safe rejection
+  of paths, URLs, non-image data, malformed base64, and oversized collections.
+- Architecture implementation review approved direct resident-repository
+  response ownership. Validated PR review fixes then added CR/LF-safe pending
+  markers, pre-start best-effort stale-marker cleanup, connecting-client and
+  globally monotonic generation fencing, generation-safe extension dialogs,
+  exact slash-command dispatch with privacy-safe presentation, ambiguous-timeout
+  teardown with old-dialog retirement, and disposal waiting for active idle-reap
+  teardown.
+- Full package tests pass (211 tests); fatal analysis and diff checks pass. The
+  pinned formatter still crashes on the pre-existing Dart 3.13
+  primary-constructor enum in `pi_session_storage_api.dart`; every other changed
+  Dart file formats cleanly.
+- No generated files, database schema, client/bridge wire contract, analytics,
+  or registered plugin change. Pi composition/catalog exposure remain Steps
+  15-16; Pi remains app-invisible until Step 18. Cold replay cannot recover
+  `userVisibleArguments` from Pi's persisted raw command without new persistence,
+  so cold replay conservatively displays only the slash-command token for both
+  API commands and manually typed slash prompts, never hidden raw arguments;
+  live API-command presentation retains exact `userVisibleArguments`.
+- Diff: +3,202/-101 = 3,303 changed lines; generated lines: 0; tests run: 211.
+  Review-fix working-tree delta excluding this tracker evidence: +586/-85 =
+  671 changed lines. Recorded overage:
+  persistence, residency, replay hydration, turn settlement, attachment
+  validation, and focused concurrency/lifecycle tests form one required Step 14
+  seam; splitting would leave resident processes without their owning lane or
+  required fencing evidence.
 
 ## Findings And Plan Deltas
 
