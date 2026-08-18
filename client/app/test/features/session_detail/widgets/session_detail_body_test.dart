@@ -444,6 +444,7 @@ void main() {
   testWidgets("sending feedback replaces the empty transcript label", (tester) async {
     final state = _loadedState(pendingQuestions: const [], pendingPermissions: const []).copyWith(
       sendingSubmission: const QueuedSessionSubmission.text(
+        promptId: "prompt-1",
         text: "Cold-start prompt",
         inputMode: ComposerInputMode.typed,
         attachments: [],
@@ -735,6 +736,7 @@ void main() {
           isArchived: true,
           queuedMessages: const [
             QueuedSessionSubmission.text(
+              promptId: "prompt-1",
               text: "Queued before archive",
               inputMode: ComposerInputMode.typed,
               attachments: [],
@@ -2717,6 +2719,7 @@ void main() {
     final state = _loadedState(pendingQuestions: const [], pendingPermissions: const []).copyWith(
       queuedMessages: [
         QueuedSessionSubmission.text(
+          promptId: "prompt-1",
           text: "",
           inputMode: ComposerInputMode.typed,
           attachments: [
@@ -2738,6 +2741,7 @@ void main() {
 
   testWidgets("a queued submission renders inline with the transcript", (tester) async {
     const submission = QueuedSessionSubmission.text(
+      promptId: "prompt-1",
       text: "Please **review** `main.dart`",
       inputMode: ComposerInputMode.typed,
       attachments: [],
@@ -2784,6 +2788,7 @@ void main() {
 
   testWidgets("the same inline queued bubble becomes sending in place", (tester) async {
     const submission = QueuedSessionSubmission.text(
+      promptId: "prompt-1",
       text: "Cold-start prompt",
       inputMode: ComposerInputMode.typed,
       attachments: [],
@@ -2791,6 +2796,7 @@ void main() {
       agentModel: null,
     );
     const followingSubmission = QueuedSessionSubmission.text(
+      promptId: "prompt-1",
       text: "Next prompt",
       inputMode: ComposerInputMode.typed,
       attachments: [],
@@ -2848,6 +2854,7 @@ void main() {
     addTearDown(tester.binding.platformDispatcher.clearAccessibilityFeaturesTestValue);
 
     const submission = QueuedSessionSubmission.text(
+      promptId: "prompt-1",
       text: "Cold-start prompt",
       inputMode: ComposerInputMode.typed,
       attachments: [],
@@ -2878,6 +2885,7 @@ void main() {
   testWidgets("an in-flight submission stays visible without a cancel action", (tester) async {
     final state = _loadedState(pendingQuestions: const [], pendingPermissions: const []).copyWith(
       sendingSubmission: const QueuedSessionSubmission.text(
+        promptId: "prompt-1",
         text: "Cold-start prompt",
         inputMode: ComposerInputMode.typed,
         attachments: [],
