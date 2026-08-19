@@ -151,6 +151,92 @@ void main() {
 
       expect(permissionRepository.requestIds, ["first"]);
     });
+
+    test("a resolved snapshot approves each permission and hides the approved ones", () async {
+      const permission = PendingPermission(
+        id: "first",
+        sessionID: "session-one",
+        displaySessionId: null,
+        tool: "tool",
+        description: "first",
+      );
+      permissionRepository.onReply = ({required requestId, required sessionId, required reply}) async {
+        permissionRepository.requestIds.add(requestId);
+      };
+
+      final unresolved = await autoApproval.resolveSnapshot(permissions: const [permission]);
+
+      expect(unresolved, isEmpty);
+      expect(permissionRepository.requestIds, ["first"]);
+    });
+
+    test("a snapshot permission whose approval fails stays visible", () async {
+      const failing = PendingPermission(
+        id: "failing",
+        sessionID: "session-one",
+        displaySessionId: null,
+        tool: "tool",
+        description: "failing",
+      );
+      const working = PendingPermission(
+        id: "working",
+        sessionID: "session-one",
+        displaySessionId: null,
+        tool: "tool",
+        description: "working",
+      );
+      permissionRepository.onReply = ({required requestId, required sessionId, required reply}) async {
+        if (requestId == "failing") throw StateError("backend rejected the reply");
+        permissionRepository.requestIds.add(requestId);
+      };
+
+      final unresolved = await autoApproval.resolveSnapshot(permissions: const [failing, working]);
+
+      expect(unresolved.map((permission) => permission.id), ["failing"]);
+      expect(permissionRepository.requestIds, ["working"]);
+    });
+
+    test("disabling yolo mid-snapshot keeps the remaining permissions visible", () async {
+      const first = PendingPermission(
+        id: "first",
+        sessionID: "session-one",
+        displaySessionId: null,
+        tool: "tool",
+        description: "first",
+      );
+      const second = PendingPermission(
+        id: "second",
+        sessionID: "session-one",
+        displaySessionId: null,
+        tool: "tool",
+        description: "second",
+      );
+      permissionRepository.onReply = ({required requestId, required sessionId, required reply}) async {
+        permissionRepository.requestIds.add(requestId);
+        await settingsRepository.updateYolo(enabled: false);
+      };
+
+      final unresolved = await autoApproval.resolveSnapshot(permissions: const [first, second]);
+
+      expect(permissionRepository.requestIds, ["first"]);
+      expect(unresolved.map((permission) => permission.id), ["second"]);
+    });
+
+    test("the snapshot passes through untouched when yolo is off", () async {
+      await settingsRepository.updateYolo(enabled: false);
+      const permission = PendingPermission(
+        id: "first",
+        sessionID: "session-one",
+        displaySessionId: null,
+        tool: "tool",
+        description: "first",
+      );
+
+      final unresolved = await autoApproval.resolveSnapshot(permissions: const [permission]);
+
+      expect(unresolved, [permission]);
+      expect(permissionRepository.requestIds, isEmpty);
+    });
   });
 }
 
