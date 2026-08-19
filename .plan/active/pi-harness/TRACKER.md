@@ -68,8 +68,8 @@ binary install. `OMP_PROTOCOL.md` records the supporting evidence.
 | [x] | 15/21 | `⚙️ [pi-harness] feat(pi): expose models and commands [step 15/21]` | 900-1,300 | Merged as PR #920 |
 | [x] | 16/21 | `🚧 [pi-harness] feat(pi): implement the plugin API [step 16/21]` | 1,100-1,500 (recorded slight overage) | Merged as PR #925 |
 | [x] | 17/21 | `🚧 [pi-harness] feat(pi): add managed runtime and lifecycle [step 17/21]` | 1,100-1,500 | Merged as PR #963 |
-| [ ] | 18/21 | `⚙️ [pi-harness] feat(bridge): register Pi and OMP [step 18/21]` | 800-1,200 | Implemented; PR ready to raise |
-| [ ] | 19/21 | `⚙️ [pi-harness] feat(client): add Pi and OMP branding and guidance [step 19/21]` | 500-900 | Not started |
+| [x] | 18/21 | `⚙️ [pi-harness] feat(bridge): register Pi and OMP [step 18/21]` | 800-1,200 (over-estimate) | Merged as PR #967 |
+| [ ] | 19/21 | `🌿 [pi-harness] feat(client): add Pi and OMP branding and guidance [step 19/21]` | 500-900 (over-estimate) | Open as PR #973 |
 | [ ] | 20/21 | `⚙️ [pi-harness] test(harness): verify Pi and OMP integration [step 20/21]` | 300-700 | Not started |
 | [ ] | 21/21 | `🌱 [pi-harness] docs: retire the Pi and OMP harness plan [step 21/21]` | 50-200 | Not started |
 
@@ -590,6 +590,35 @@ binary install. `OMP_PROTOCOL.md` records the supporting evidence.
   and Oh My Pi as selectable harnesses once their setup is ready.
 - Diff before tracker/plan evidence: +393/-10 = 403 changed lines; generated
   lines: 46 (one freezed state file).
+
+### Step 19/21
+
+- Step 18 merged as PR #967. Added official Pi light/dark SVG artwork and Oh My
+  Pi's shared light/dark gradient mark to the client brand catalog, with stable
+  `Pi` / `Oh My Pi` display-name cases; unknown plugin ids retain the existing
+  raw-id and generic-plug fallback.
+- Expanded README guidance for managed install and authoritative `--pi-bin` /
+  `--omp-bin` overrides, inherited Pi/OMP profiles, local-only provider login,
+  OMP's standard-ACP feature boundary, and the unsupported concurrent terminal
+  handoff. The headline is scalable while intro, Bridge, and feature copy list
+  and link every supported assistant for discoverability.
+- Updated the plugin lifecycle regression contract for both brand identities.
+  No obsolete client state, assets, or copy paths became removable beyond the
+  replaced fixed-harness wording.
+- Verification after rebasing onto the Step 18 merge: module_prego fatal
+  analysis and all 209 tests pass; mobile app fatal analysis passes; all six
+  linked assistant sites return HTTP 200; the gradient OMP mark renders in the
+  iOS harness picker;
+  `git diff --check $(git merge-base origin/main HEAD)..HEAD` passes.
+- User-visible impact is limited to Pi/OMP branding and documentation. No
+  database, persisted-data, wire-contract, or runtime behavior change.
+- Product diff excluding this tracker evidence, measured with
+  `git diff --numstat $(git merge-base origin/main HEAD)..HEAD -- .
+  ':(exclude).plan/active/pi-harness/TRACKER.md'`: +122/-7 = 129 changed
+  lines; generated lines: 0. This is well below the 500-900 estimate because
+  Step 18 already absorbed the shared activation/notification prerequisites;
+  this step reused the existing brand catalog and needed only localized assets,
+  mappings, tests, and guidance. The original budget was an over-estimate.
 
 ## Findings And Plan Deltas
 
