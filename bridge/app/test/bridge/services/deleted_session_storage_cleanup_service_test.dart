@@ -73,10 +73,7 @@ class _FakeSessionRepository({
     required String pluginId,
     required String backendSessionId,
   }) async {
-    cleanupCalls.add((
-      pluginId: pluginId,
-      backendSessionId: backendSessionId,
-    ));
+    cleanupCalls.add((pluginId: pluginId, backendSessionId: backendSessionId));
     if (failingCleanups.contains("$pluginId:$backendSessionId")) {
       throw StateError("cleanup failed");
     }

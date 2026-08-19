@@ -3,9 +3,9 @@
 ## Current State
 
 - **Plan slug:** `pi-harness`
-- **Implementation base:** current `origin/main` with Step 14 merged
-- **Series state:** Step 14/21 merged; Step 15/21 in PR
-- **Current step:** 15/21, Pi models and commands under review
+- **Implementation base:** current `origin/main` with Step 15 merged
+- **Series state:** Step 16/21 in review as PR #925
+- **Current step:** 16/21, Pi plugin API in review
 - **Plan PR:** https://github.com/sesori-ai/sesori_apps_monorepo/pull/811
 - **Step 2 PR:** https://github.com/sesori-ai/sesori_apps_monorepo/pull/819
 - **Step 3 PR:** https://github.com/sesori-ai/sesori_apps_monorepo/pull/820
@@ -22,7 +22,8 @@
 - **Step 13 PR:** https://github.com/sesori-ai/sesori_apps_monorepo/pull/910
 - **Step 14 PR:** https://github.com/sesori-ai/sesori_apps_monorepo/pull/914
 - **Step 15 PR:** https://github.com/sesori-ai/sesori_apps_monorepo/pull/920
-- **Next action:** monitor the Step 15 PR while starting Step 16 locally
+- **Step 16 PR:** https://github.com/sesori-ai/sesori_apps_monorepo/pull/925
+- **Next action:** monitor Step 16 and begin Step 17 locally
 
 ## Locked Decisions
 
@@ -63,8 +64,8 @@ binary install. `OMP_PROTOCOL.md` records the supporting evidence.
 | [x] | 12/21 | `🚧 [pi-harness] feat(pi): map live messages and tools [step 12/21]` | 1,200-1,500 (recorded overage) | Merged as PR #905 |
 | [x] | 13/21 | `⚙️ [pi-harness] feat(pi): bridge extension dialogs [step 13/21]` | 900-1,300 | Merged as PR #910 |
 | [x] | 14/21 | `🚧 [pi-harness] feat(pi): manage session residency and turns [step 14/21]` | 1,200-1,500 (recorded overage) | Merged as PR #914 |
-| [ ] | 15/21 | `⚙️ [pi-harness] feat(pi): expose models and commands [step 15/21]` | 900-1,300 | PR #920 open |
-| [ ] | 16/21 | `🚧 [pi-harness] feat(pi): implement the plugin API [step 16/21]` | 1,100-1,500 | Not started |
+| [x] | 15/21 | `⚙️ [pi-harness] feat(pi): expose models and commands [step 15/21]` | 900-1,300 | Merged as PR #920 |
+| [ ] | 16/21 | `🚧 [pi-harness] feat(pi): implement the plugin API [step 16/21]` | 1,100-1,500 (recorded slight overage) | In review as PR #925 |
 | [ ] | 17/21 | `🚧 [pi-harness] feat(pi): add managed runtime and lifecycle [step 17/21]` | 1,100-1,500 | Not started; runtime dependency merged |
 | [ ] | 18/21 | `⚙️ [pi-harness] feat(bridge): register Pi and OMP [step 18/21]` | 800-1,200 | Not started |
 | [ ] | 19/21 | `⚙️ [pi-harness] feat(client): add Pi and OMP branding and guidance [step 19/21]` | 500-900 | Not started |
@@ -486,7 +487,40 @@ binary install. `OMP_PROTOCOL.md` records the supporting evidence.
   field exists, so Pi image input support is parsed but not exposed through an
   invented backend-neutral field.
 - No database, persisted-data, client/bridge wire-contract, analytics, or
-  registered-plugin impact. Step 14 merged as PR #914; Step 15 is in PR #920.
+  registered-plugin impact. Step 15 merged as PR #920.
+
+### Step 16/21
+
+- Added the coherent `PiPlugin` composition root over session catalogs,
+  residency/turns, extension dialogs, project-scoped options, buffered events,
+  health, active summaries, and idempotent ordered disposal. Every
+  `BridgeDerivedProjectsPluginApi` and `PersistedSessionCleanupApi` operation is
+  implemented; Pi remains unregistered until Step 18.
+- Added lazy empty-prompt creation, parent-aware pending markers, exact
+  rename/history/delete lookup, root-and-descendant lifecycle fencing, named-root
+  physical deletion, question/toast mapping, permission degradation, selection
+  validation, command acceptance, and cause-preserving failures.
+- User-directed slimming removed the tombstone directory column, schema v14
+  migration, and directory threading through the cleanup contract. Startup
+  cleanup retries stay ID-only; Pi resolves via its normal directory scan and
+  accepts a rare undiscoverable-cwd disk leak (tombstone still blocks
+  re-import). Claude, Cursor, and OMP keep their unchanged contract.
+- Architecture implementation review approved the coherent factory, repository
+  boundaries, service lifecycle ownership, and repository-owned cleanup record.
+- Pi package tests pass (236 tests) with fatal analysis. Focused app
+  persistence/repository/cleanup/migration tests pass (120 tests); plugin
+  interface (153), Cursor (31), OMP (18), and Claude (17) suites and fatal
+  analysis pass. Codegen/schema generation and diff checks pass.
+- No user-visible, analytics, registered-plugin, client/bridge wire, or
+  database impact.
+- Review fixes clear project-local pending
+  markers after global-root deletion, preserve catalog failures as causes,
+  resolve cross-project fork parents, await idle reaps during deletion, and emit
+  deletion events only after physical deletion succeeds. Active summaries keep
+  all active descendants grouped under the displayed root; filtering to direct
+  children would omit active nested forks from the only root summary.
+- Diff metrics stale after the user-directed cleanup slimming; refresh with
+  final verification before merge.
 
 ## Findings And Plan Deltas
 

@@ -35,17 +35,16 @@ class DeletedSessionStorageCleanupService({
         continue;
       }
 
-      final orderedSessionIds = sessionIds.toList(growable: false)..sort();
-      for (final sessionId in orderedSessionIds) {
+      for (final backendSessionId in sessionIds.toList(growable: false)..sort()) {
         try {
           await _sessionRepository.deletePersistedSession(
             pluginId: pluginId,
-            backendSessionId: sessionId,
+            backendSessionId: backendSessionId,
           );
         } on Object catch (error, stackTrace) {
           Log.w(
             "Failed to delete persisted session storage "
-            "(plugin=$pluginId, sessionId=$sessionId); retrying next startup",
+            "(plugin=$pluginId, sessionId=$backendSessionId); retrying next startup",
             error,
             stackTrace,
           );

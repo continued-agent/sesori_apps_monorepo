@@ -927,7 +927,11 @@ void main() {
         _session("/tmp/proj/alpha", id: "kept", created: 1, updated: 1),
         _session("/tmp/proj/deleted-only", id: "gone", created: 1, updated: 1),
       ];
-      await db.sessionDao.insertSessionTombstone(backendSessionId: "gone", pluginId: "codex", deletedAt: 1);
+      await db.sessionDao.insertSessionTombstone(
+        backendSessionId: "gone",
+        pluginId: "codex",
+        deletedAt: 1,
+      );
       await db.projectsDao.setActivity(projectId: "/tmp/proj/alpha", createdAt: 1, updatedAt: 2);
       await db.projectsDao.setActivity(projectId: "/tmp/proj/deleted-only", createdAt: 1, updatedAt: 1);
 

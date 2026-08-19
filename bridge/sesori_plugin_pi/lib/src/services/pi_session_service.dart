@@ -1,4 +1,5 @@
 import "dart:async";
+import "dart:collection";
 
 import "package:sesori_plugin_interface/sesori_plugin_interface.dart";
 import "package:sesori_shared/sesori_shared.dart" as shared;
@@ -7,6 +8,7 @@ import "../api/models/pi_event.dart";
 import "../api/models/pi_extension_ui_request.dart";
 import "../api/models/pi_rpc_frame.dart";
 import "../api/pi_rpc_client.dart";
+import "../repositories/pi_session_catalog_repository.dart";
 import "../repositories/pi_session_process_repository.dart";
 import "pi_event_dispatcher.dart";
 import "pi_extension_ui_service.dart";
@@ -22,15 +24,39 @@ final class const PiTurnCancelledException({required final String sessionId}) im
 }
 
 final class _PiSessionTurnState({required final String initialDirectory}) {
+  /// See [recentPromptIds]. 64 comfortably exceeds any realistic gap between
+  /// a lost acceptance response and its retry.
+  static const int _recentPromptIdLimit = 64;
+
   String directory = initialDirectory;
   final List<_PiTurn> queue = [];
   _PiTurn? active;
   Future<void>? idleReap;
+  PluginSessionStatus status = const PluginSessionStatus.idle();
   int generation = 0;
   int idleGeneration = 0;
+
+  /// Settled turns' prompt ids, retained so the retry of a send whose
+  /// response was lost is an idempotent no-op instead of a duplicate turn.
+  /// Active and queued turns carry their id and are checked live, so only
+  /// settled ids need this bounded window.
+  final Queue<String> recentPromptIds = Queue<String>();
+
+  bool isAdmitted({required String promptId}) =>
+      active?.promptId == promptId ||
+      queue.any((turn) => turn.promptId == promptId) ||
+      recentPromptIds.contains(promptId);
+
+  void recordSettledPromptId({required String promptId}) {
+    recentPromptIds.addLast(promptId);
+    while (recentPromptIds.length > _recentPromptIdLimit) {
+      recentPromptIds.removeFirst();
+    }
+  }
 }
 
 final class _PiTurn({
+  required final String promptId,
   required final PiPromptPayload payload,
   required final ({String providerID, String modelID})? model,
   required final PluginSessionVariant? variant,
@@ -47,6 +73,7 @@ final class _PiTurn({
 
 final class PiSessionService({
   required final PiSessionProcessRepository processRepository,
+  required final PiSessionCatalogRepository catalogRepository,
   required final PiEventDispatcher eventDispatcher,
   required final PiExtensionUiService extensionUiService,
   required final ServerClock clock,
@@ -58,6 +85,7 @@ final class PiSessionService({
   }
 
   final PiSessionProcessRepository _processes = processRepository;
+  final PiSessionCatalogRepository _catalog = catalogRepository;
   final PiEventDispatcher _dispatcher = eventDispatcher;
   final PiExtensionUiService _extensionUi = extensionUiService;
   final ServerClock _clock = clock;
@@ -76,23 +104,87 @@ final class PiSessionService({
   Stream<PluginWorkState> get workState => _workState.stream;
   PluginWorkState get currentWorkState => _workState.current;
 
-  Future<String> prepareNewSession({required String directory}) async {
+  String? directoryForSession({required String sessionId}) =>
+      _sessions[sessionId]?.directory ?? _pendingNewDirectories[sessionId];
+
+  Future<String> prepareNewSession({required String directory, required String? parentSessionId}) async {
     if (_disposed) throw const PiRpcDisposedException();
     final sessionId = _processes.generateSessionId();
-    await _processes.markPendingNew(sessionId: sessionId, directory: directory);
+    final parent = parentSessionId == null ? null : await _catalog.findSessionById(sessionId: parentSessionId);
+    await _processes.markPendingNew(
+      sessionId: sessionId,
+      directory: directory,
+      parentSessionId: parentSessionId,
+      parentDirectory: parent?.directory,
+    );
     _pendingNewDirectories[sessionId] = directory;
     return sessionId;
   }
 
-  Map<String, PluginSessionStatus> get sessionStatuses => Map.unmodifiable({
-    for (final entry in _sessions.entries)
-      entry.key: entry.value.active != null || entry.value.queue.isNotEmpty
-          ? const PluginSessionStatus.busy()
-          : const PluginSessionStatus.idle(),
-  });
+  Map<String, PluginSessionStatus> get sessionStatuses =>
+      Map.unmodifiable({for (final entry in _sessions.entries) entry.key: entry.value.status});
+
+  Future<void> deleteSession({required PluginSession root}) async {
+    final sessions = await _catalog.listAllSessions(knownDirectories: {root.directory});
+    final descendants = _descendantIds(rootId: root.id, sessions: sessions);
+    for (final affected in [root.id, ...descendants]) {
+      await forgetSession(sessionId: affected);
+      _catalog.forgetSession(sessionId: affected);
+    }
+    await _processes.deletePersistedSession(sessionId: root.id, directory: root.directory);
+  }
+
+  List<PluginProjectActivitySummary> getActiveSessionsSummary() {
+    final statuses = sessionStatuses;
+    final sessions = _catalog.sessionSnapshot;
+    final activeIds = <String>{};
+    for (final entry in statuses.entries) {
+      final running = entry.value is PluginSessionStatusBusy || entry.value is PluginSessionStatusRetry;
+      final awaitingInput = _extensionUi.getPendingQuestions(sessionId: entry.key).isNotEmpty;
+      if (running || awaitingInput) activeIds.add(entry.key);
+    }
+    final rootIds = <String>{};
+    for (final sessionId in activeIds) {
+      var rootId = sessionId;
+      final visited = {sessionId};
+      while (true) {
+        final parent = sessions[rootId]?.parentID;
+        if (parent == null || !visited.add(parent)) break;
+        rootId = parent;
+      }
+      rootIds.add(rootId);
+    }
+    final byProject = <String, List<PluginActiveSession>>{};
+    for (final rootId in rootIds) {
+      final status = statuses[rootId];
+      final directory = sessions[rootId]?.directory ?? directoryForSession(sessionId: rootId);
+      if (directory == null) continue;
+      final descendants = _descendantIds(rootId: rootId, sessions: sessions.values.toList());
+      final activeDescendants = [
+        for (final id in descendants)
+          if (activeIds.contains(id)) id,
+      ];
+      final activeFamilyIds = [rootId, ...activeDescendants];
+      (byProject[directory] ??= []).add(
+        PluginActiveSession(
+          id: rootId,
+          mainAgentRunning: status is PluginSessionStatusBusy || status is PluginSessionStatusRetry,
+          awaitingInput: activeFamilyIds.any(
+            (sessionId) => _extensionUi.getPendingQuestions(sessionId: sessionId).isNotEmpty,
+          ),
+          isRetrying: activeFamilyIds.any((sessionId) => statuses[sessionId] is PluginSessionStatusRetry),
+          childSessionIds: activeDescendants,
+        ),
+      );
+    }
+    return [
+      for (final entry in byProject.entries) PluginProjectActivitySummary(id: entry.key, activeSessions: entry.value),
+    ];
+  }
 
   Future<void> sendPrompt({
     required String sessionId,
+    required String promptId,
     required String directory,
     required List<PluginPromptPart> parts,
     required String? userVisibleText,
@@ -105,6 +197,7 @@ final class PiSessionService({
       sessionId: sessionId,
       directory: directory,
       turn: _PiTurn(
+        promptId: promptId,
         payload: payload,
         model: model,
         variant: variant,
@@ -117,6 +210,7 @@ final class PiSessionService({
 
   Future<void> sendCommand({
     required String sessionId,
+    required String promptId,
     required String directory,
     required String command,
     required String arguments,
@@ -126,6 +220,7 @@ final class PiSessionService({
   }) {
     if (_disposed) return Future.error(const PiRpcDisposedException());
     final state = _sessions[sessionId];
+    if (state != null && state.isAdmitted(promptId: promptId)) return Future.value();
     if (state?.active != null || (state?.queue.isNotEmpty ?? false)) {
       return Future.error(PiSessionBusyException(sessionId: sessionId));
     }
@@ -138,6 +233,7 @@ final class PiSessionService({
       sessionId: sessionId,
       directory: directory,
       turn: _PiTurn(
+        promptId: promptId,
         payload: payload,
         model: model,
         variant: variant,
@@ -150,10 +246,18 @@ final class PiSessionService({
 
   void _admit({required String sessionId, required String directory, required _PiTurn turn}) {
     final state = _sessions.putIfAbsent(sessionId, () => _PiSessionTurnState(initialDirectory: directory));
+    if (state.isAdmitted(promptId: turn.promptId)) {
+      // The retry of a send whose response was lost: the turn is already
+      // admitted (queued, running, or finished), so accept idempotently.
+      final acceptance = turn.commandAcceptance;
+      if (acceptance != null && !acceptance.isCompleted) acceptance.complete();
+      return;
+    }
     state.directory = directory;
     state.idleGeneration++;
     state.queue.add(turn);
     if (state.active == null && state.queue.length == 1) {
+      state.status = const PluginSessionStatus.busy();
       _emit(
         BridgeSseSessionStatus(
           sessionID: sessionId,
@@ -205,6 +309,7 @@ final class PiSessionService({
       }
       _dispatcher.beginTurn(
         sessionId: sessionId,
+        promptId: turn.promptId,
         executionText: turn.payload.message,
         userVisibleText: turn.userVisibleText,
       );
@@ -277,12 +382,21 @@ final class PiSessionService({
     switch (processFrame.frame) {
       case PiEventFrame(:final event):
         if (turn.promptDispatched && event is PiAgentStartEvent) turn.agentStarted = true;
-        for (final mapped in _dispatcher.map(sessionId: processFrame.sessionId, event: event)) {
+        final now = _clock.now();
+        final mappedStatus = _dispatcher.sessionStatusFor(event: event, now: now);
+        final statusChanged =
+            mappedStatus != null &&
+            event is! PiAgentStartEvent &&
+            event is! PiAgentSettledEvent &&
+            state.status != mappedStatus;
+        if (statusChanged) state.status = mappedStatus;
+        for (final mapped in _dispatcher.map(sessionId: processFrame.sessionId, event: event, now: now)) {
           final serviceOwnsLifecycle =
               (event is PiAgentStartEvent || event is PiAgentSettledEvent) &&
               (mapped is BridgeSseSessionStatus || mapped is BridgeSseSessionIdle);
           if (!serviceOwnsLifecycle) _emit(mapped);
         }
+        if (statusChanged) _emit(const BridgeSseProjectUpdated());
         if (turn.promptDispatched && event is PiAgentSettledEvent) {
           turn.agentSettled = true;
           if (turn.responseSucceeded) {
@@ -355,6 +469,7 @@ final class PiSessionService({
   }) {
     if (turn.settled) return;
     turn.settled = true;
+    state.recordSettledPromptId(promptId: turn.promptId);
     final acceptance = turn.commandAcceptance;
     if (acceptance != null && !acceptance.isCompleted && failed) {
       acceptance.completeError(failure ?? StateError("Pi command failed before acceptance"), StackTrace.current);
@@ -364,9 +479,13 @@ final class PiSessionService({
     if (failed) _emit(BridgeSseSessionError(sessionID: sessionId));
     unawaited(_clearPendingWhenPersisted(sessionId: sessionId, directory: state.directory));
     if (state.queue.isNotEmpty) {
+      final statusChanged = state.status != const PluginSessionStatus.busy();
+      state.status = const PluginSessionStatus.busy();
+      if (statusChanged) _emit(const BridgeSseProjectUpdated());
       _startNext(sessionId: sessionId, state: state);
       return;
     }
+    state.status = const PluginSessionStatus.idle();
     _emit(
       BridgeSseSessionStatus(
         sessionID: sessionId,
@@ -403,6 +522,7 @@ final class PiSessionService({
     final cancelled = [?state.active, ...state.queue];
     state.active = null;
     state.queue.clear();
+    state.status = const PluginSessionStatus.idle();
     for (final turn in cancelled) {
       final acceptance = turn.commandAcceptance;
       if (acceptance != null && !acceptance.isCompleted) {
@@ -437,6 +557,22 @@ final class PiSessionService({
     if (state != null) {
       state.generation++;
       state.idleGeneration++;
+      for (final turn in [?state.active, ...state.queue]) {
+        final acceptance = turn.commandAcceptance;
+        if (acceptance != null && !acceptance.isCompleted) {
+          acceptance.completeError(PiTurnCancelledException(sessionId: sessionId), StackTrace.current);
+        }
+      }
+      state.active = null;
+      state.queue.clear();
+    }
+    final idleReap = state?.idleReap;
+    if (idleReap != null) {
+      try {
+        await idleReap;
+      } on Object catch (error, stackTrace) {
+        Log.w("[pi] idle process teardown failed while forgetting $sessionId", error, stackTrace);
+      }
     }
     _extensionUi.cancelForOwner(sessionId: sessionId, processGeneration: null);
     final pendingDirectory = _pendingNewDirectories.remove(sessionId);
@@ -446,6 +582,22 @@ final class PiSessionService({
     );
     _dispatcher.forgetSession(sessionId: sessionId);
     _syncWorkState();
+  }
+
+  Set<String> _descendantIds({required String rootId, required List<PluginSession> sessions}) {
+    final children = <String, List<String>>{};
+    for (final session in sessions) {
+      final parent = session.parentID;
+      if (parent != null) (children[parent] ??= []).add(session.id);
+    }
+    final descendants = <String>{};
+    final pending = [...?children[rootId]];
+    while (pending.isNotEmpty) {
+      final id = pending.removeLast();
+      if (!descendants.add(id)) continue;
+      pending.addAll(children[id] ?? const []);
+    }
+    return descendants;
   }
 
   void _scheduleIdleReap({required String sessionId, required _PiSessionTurnState state}) {
