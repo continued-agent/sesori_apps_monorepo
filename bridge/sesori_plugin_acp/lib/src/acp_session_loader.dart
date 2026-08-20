@@ -49,8 +49,7 @@ class AcpReplayCollector({
         final t = _contentMapper.text(content: update["content"]);
         if (t != null) _assistant(messageId: _chunkMessageId(update)).reasoning.write(t);
       case "user_message_chunk":
-        final t = _contentMapper.text(content: update["content"]);
-        if (t != null) _user(messageId: _chunkMessageId(update)).text.write(t);
+        _consumeUserContent(update: update);
       case "tool_call":
         final id = update["toolCallId"] as String?;
         if (id == null) return;
@@ -124,6 +123,17 @@ class AcpReplayCollector({
         }
         if (update.containsKey("title")) draft.title = _toolTitle(update);
         draft.contentTracker.apply(mutation: contentMutation);
+    }
+  }
+
+  void _consumeUserContent({required Map<String, dynamic> update}) {
+    final draft = _user(messageId: _chunkMessageId(update));
+    final blocks = _contentMapper.mapScoped(
+      content: _stripUserImageUris(update["content"]),
+      scope: draft.contentTracker.mappingScope,
+    );
+    for (final mutation in draft.contentTracker.append(blocks: blocks)) {
+      draft.entries.add(_AssistantContentEntry(mutation: mutation));
     }
   }
 
@@ -469,6 +479,15 @@ class AcpReplayCollector({
   Map<String, dynamic>? _asMap(Object? value) {
     if (value is Map) return value.cast<String, dynamic>();
     return null;
+  }
+
+  Object? _stripUserImageUris(Object? content) {
+    if (content is List) {
+      return content.map(_stripUserImageUris).toList(growable: false);
+    }
+    final block = _asMap(content);
+    if (block == null || block["type"] != "image") return content;
+    return Map<String, dynamic>.of(block)..remove("uri");
   }
 
   /// Fail-soft tool title: a non-string value (schema drift / malformed agent
