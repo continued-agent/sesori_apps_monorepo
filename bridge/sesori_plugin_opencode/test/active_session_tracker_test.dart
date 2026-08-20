@@ -2802,13 +2802,6 @@ class _FakeApi({
   Future<List<Command>> listCommands({required String? directory}) async => const [];
 
   @override
-  Future<void> summarize({
-    required String sessionId,
-    required SummarizeBody body,
-    required String? directory,
-  }) async {}
-
-  @override
   Future<Session> createSession({required String directory, String? parentSessionId}) async =>
       throw UnimplementedError();
 
@@ -2833,9 +2826,25 @@ class _FakeApi({
   }) async {}
 
   @override
-  Future<void> sendPrompt({
+  Future<SessionMessagesResponseItem?> sendPrompt({
     required String sessionId,
     required SendPromptBody body,
+    required String? directory,
+  }) async => null;
+
+  @override
+  Future<void> updateMessagePart({
+    required String sessionId,
+    required String messageId,
+    required String partId,
+    required Part part,
+    required String? directory,
+  }) async {}
+
+  @override
+  Future<void> deleteMessage({
+    required String sessionId,
+    required String messageId,
     required String? directory,
   }) async {}
 

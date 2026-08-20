@@ -1,4 +1,5 @@
 import "package:opencode_plugin/opencode_plugin.dart";
+import "package:opencode_plugin/src/models/openapi/compaction_part.g.dart";
 import "package:sesori_plugin_interface/sesori_plugin_interface.dart";
 import "package:test/test.dart";
 
@@ -1069,6 +1070,89 @@ void main() {
     });
   });
 
+  group("OpenCodeRepository message reservation", () {
+    test("lets OpenCode name an empty non-renderable message", () async {
+      final api = _FakeApi();
+      final repository = OpenCodeRepository(api);
+
+      final messageId = await repository.reserveMessage(
+        sessionId: "ses-1",
+        directory: " /repo ",
+        agent: "build",
+        variant: const PluginSessionVariant(id: "low"),
+        model: (providerID: "openai", modelID: "gpt-4.1"),
+      );
+
+      expect(messageId, equals("msg-reserved"));
+      expect(api.lastPromptDirectory, equals("/repo"));
+      expect(
+        api.lastPromptBody?.toJson(),
+        equals({
+          "parts": <dynamic>[],
+          "agent": "build",
+          "variant": "low",
+          "model": {"providerID": "openai", "modelID": "gpt-4.1"},
+          "noReply": true,
+        }),
+      );
+    });
+
+    test("reserves and converts the exact placeholder part for compaction", () async {
+      final api = _FakeApi();
+      final repository = OpenCodeRepository(api);
+
+      final reservation = await repository.reserveCompactionMessage(
+        sessionId: "ses-1",
+        directory: "/repo",
+        userVisibleArguments: "  Keep auth decisions  ",
+        agent: "build",
+        variant: null,
+        model: (providerID: "openai", modelID: "gpt-4.1"),
+      );
+      await repository.convertReservedPartToCompaction(
+        sessionId: "ses-1",
+        directory: "/repo",
+        messageId: reservation.messageId,
+        partId: reservation.partId,
+      );
+
+      expect(reservation, equals((messageId: "msg-reserved", partId: "prt-reserved")));
+      expect(
+        api.lastPromptBody?.toJson()["parts"],
+        equals([
+          {"type": "text", "text": ""},
+          {"type": "text", "text": "Keep auth decisions"},
+        ]),
+      );
+      expect(api.lastUpdatedMessageId, equals("msg-reserved"));
+      expect(api.lastUpdatedPartId, equals("prt-reserved"));
+      expect(api.lastUpdatedPart, isA<CompactionPart>());
+      expect(
+        api.lastUpdatedPart?.toJson(),
+        equals({
+          "id": "prt-reserved",
+          "sessionID": "ses-1",
+          "messageID": "msg-reserved",
+          "type": "compaction",
+          "auto": false,
+        }),
+      );
+    });
+
+    test("deletes a rejected reservation by exact message id", () async {
+      final api = _FakeApi();
+      final repository = OpenCodeRepository(api);
+
+      await repository.deleteMessage(
+        sessionId: "ses-1",
+        directory: "/repo",
+        messageId: "msg-reserved",
+      );
+
+      expect(api.lastDeletedMessageId, equals("msg-reserved"));
+    });
+  });
+
   group("OpenCodeRepository variant passthrough", () {
     test("sendPrompt forwards raw variant", () async {
       final api = _FakeApi();
@@ -1128,26 +1212,6 @@ void main() {
     });
   });
 
-  group("OpenCodeRepository.summarize", () {
-    test("builds the summarize payload and normalizes the directory", () async {
-      final api = _FakeApi();
-      final repository = OpenCodeRepository(api);
-
-      await repository.summarize(
-        sessionId: "ses-1",
-        directory: " /repo ",
-        model: (providerID: "openai", modelID: "gpt-4.1"),
-      );
-
-      expect(api.lastSummarizeSessionId, equals("ses-1"));
-      expect(api.lastSummarizeDirectory, equals("/repo"));
-      expect(
-        api.lastSummarizeBody?.toJson(),
-        equals({"providerID": "openai", "modelID": "gpt-4.1", "auto": false}),
-      );
-    });
-  });
-
   group("OpenCodeRepository.addCompactionInstructions", () {
     test("persists instructions as a no-reply prompt", () async {
       final api = _FakeApi();
@@ -1169,7 +1233,7 @@ void main() {
         api.lastPromptBody?.toJson(),
         equals({
           "parts": [
-            {"type": "text", "text": "Keep auth decisions"},
+            {"type": "text", "text": "Keep auth decisions", "synthetic": true},
           ],
           "agent": "build",
           "variant": "high",
@@ -1189,6 +1253,7 @@ void main() {
         variant: "low",
         model: null,
         noReply: false,
+        syntheticText: false,
       ).toJson();
       final withoutVariant = const SendPromptBody(
         messageID: null,
@@ -1197,6 +1262,7 @@ void main() {
         variant: null,
         model: null,
         noReply: false,
+        syntheticText: false,
       ).toJson();
 
       expect(withVariant["variant"], equals("low"));
@@ -1245,12 +1311,13 @@ class _FakeApi({
   String? lastPromptDirectory;
   SendPromptBody? lastPromptBody;
   final List<SendPromptBody> promptBodies = [];
+  Part? lastUpdatedPart;
+  String? lastUpdatedMessageId;
+  String? lastUpdatedPartId;
+  String? lastDeletedMessageId;
   String? lastCommandSessionId;
   String? lastCommandDirectory;
   SendCommandBody? lastCommandBody;
-  String? lastSummarizeSessionId;
-  String? lastSummarizeDirectory;
-  SummarizeBody? lastSummarizeBody;
   String? lastGetProjectDirectory;
   int updateProjectCalls = 0;
 
@@ -1318,7 +1385,7 @@ class _FakeApi({
   }) async {}
 
   @override
-  Future<void> sendPrompt({
+  Future<SessionMessagesResponseItem?> sendPrompt({
     required String sessionId,
     required SendPromptBody body,
     required String? directory,
@@ -1327,6 +1394,49 @@ class _FakeApi({
     lastPromptDirectory = directory;
     lastPromptBody = body;
     promptBodies.add(body);
+    if (!body.noReply) return null;
+    return SessionMessagesResponseItem.fromJson({
+      "info": {
+        "id": "msg-reserved",
+        "sessionID": sessionId,
+        "role": "user",
+        "time": const {"created": 1},
+        "agent": body.agent ?? "build",
+        "model": const {"providerID": "openai", "modelID": "gpt-4.1"},
+      },
+      "parts": [
+        if (body.parts.isNotEmpty)
+          {
+            "id": "prt-reserved",
+            "sessionID": sessionId,
+            "messageID": "msg-reserved",
+            "type": "text",
+            "text": "",
+          },
+      ],
+    });
+  }
+
+  @override
+  Future<void> updateMessagePart({
+    required String sessionId,
+    required String messageId,
+    required String partId,
+    required Part part,
+    required String? directory,
+  }) async {
+    lastUpdatedMessageId = messageId;
+    lastUpdatedPartId = partId;
+    lastUpdatedPart = part;
+  }
+
+  @override
+  Future<void> deleteMessage({
+    required String sessionId,
+    required String messageId,
+    required String? directory,
+  }) async {
+    lastDeletedMessageId = messageId;
   }
 
   @override
@@ -1338,17 +1448,6 @@ class _FakeApi({
     lastCommandSessionId = sessionId;
     lastCommandDirectory = directory;
     lastCommandBody = body;
-  }
-
-  @override
-  Future<void> summarize({
-    required String sessionId,
-    required SummarizeBody body,
-    required String? directory,
-  }) async {
-    lastSummarizeSessionId = sessionId;
-    lastSummarizeDirectory = directory;
-    lastSummarizeBody = body;
   }
 
   @override
