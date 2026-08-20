@@ -355,6 +355,51 @@ void main() {
       expect(part.text, "hey");
     });
 
+    test("item userMessage carries the prompt id codex echoes as clientId", () {
+      final events = mapper.map(
+        const CodexServerNotification(
+          method: "item/completed",
+          params: {
+            "threadId": "t-1",
+            "turnId": "u-1",
+            "item": {
+              "type": "userMessage",
+              "id": "i-user",
+              "clientId": "prm_1",
+              "content": [
+                {"type": "text", "text": "hey", "text_elements": <Object?>[]},
+              ],
+            },
+          },
+        ),
+      );
+
+      final parsed = shared.Message.fromJson((events[0] as BridgeSseMessageUpdated).info);
+      expect((parsed as shared.MessageUser).promptId, "prm_1");
+    });
+
+    test("item userMessage typed in the codex CLI stays unattributed", () {
+      final events = mapper.map(
+        const CodexServerNotification(
+          method: "item/completed",
+          params: {
+            "threadId": "t-1",
+            "turnId": "u-1",
+            "item": {
+              "type": "userMessage",
+              "id": "i-user",
+              "content": [
+                {"type": "text", "text": "hey", "text_elements": <Object?>[]},
+              ],
+            },
+          },
+        ),
+      );
+
+      final parsed = shared.Message.fromJson((events[0] as BridgeSseMessageUpdated).info);
+      expect((parsed as shared.MessageUser).promptId, isNull);
+    });
+
     test("item lifecycle timestamps survive live message updates", () {
       const threadId = "t-timestamps";
       final userStarted = mapper.map(

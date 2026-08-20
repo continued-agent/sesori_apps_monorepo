@@ -461,7 +461,10 @@ class CodexEventMapper({
             sessionID: threadId,
             agent: null,
             time: time == null ? null : shared.MessageTime(created: time.created, completed: null),
-            promptId: null,
+            // Codex echoes the id the bridge sent with turn/start, so an
+            // item caused by a bridge send names its prompt; one typed in the
+            // Codex CLI carries none.
+            promptId: item["clientId"] as String?,
           ),
           partType: PluginMessagePartType.text,
           partSuffix: "text",

@@ -690,6 +690,9 @@ class CodexPlugin._({
       // applied on this first turn (and sticks for subsequent ones).
       await _startTurn(
         threadId: threadId,
+        // A session's first turn carries no client prompt id; its echo simply
+        // stays unattributed, exactly as before.
+        promptId: null,
         parts: parts,
         variant: variant,
         collaborationMode: CodexCollaborationMode.fromAgent(agent: agent),
@@ -714,6 +717,7 @@ class CodexPlugin._({
     await _connectedClient();
     await _startTurn(
       threadId: sessionId,
+      promptId: promptId,
       parts: parts,
       model: model,
       variant: variant,
@@ -749,6 +753,8 @@ class CodexPlugin._({
         threadId: sessionId,
         command: command,
         arguments: arguments,
+        // See _startTurn: Codex echoes this on the command's user item.
+        clientUserMessageId: promptId,
         model: model?.modelID,
         effort: variant?.id,
         collaborationMode: CodexCollaborationMode.fromAgent(agent: agent),
@@ -919,6 +925,7 @@ class CodexPlugin._({
 
   Future<void> _startTurn({
     required String threadId,
+    required String? promptId,
     required List<PluginPromptPart> parts,
     ({String providerID, String modelID})? model,
     PluginSessionVariant? variant,
@@ -944,6 +951,9 @@ class CodexPlugin._({
       final dispatch = await _sessionService.startTurn(
         threadId: threadId,
         parts: parts,
+        // Codex echoes this on the user item it publishes, so that item can
+        // carry the prompt id back to clients.
+        clientUserMessageId: promptId,
         model: model?.modelID,
         effort: effort == null || effort.isEmpty ? null : effort,
         collaborationMode: collaborationMode,
