@@ -13,11 +13,13 @@ import "../../errors/api_error_remote_failure_x.dart";
 import "../../foundation/models/composer/composer_attachment.dart";
 import "../../foundation/models/composer/composer_draft.dart";
 import "../../foundation/models/product_analytics/product_analytics_event.dart";
+import "../../foundation/models/session_options/session_options_request_mode.dart";
 import "../../logging/logging.dart";
 import "../../platform/lifecycle_source.dart";
 import "../../platform/notification_canceller.dart";
 import "../../repositories/composer_draft_repository.dart";
 import "../../repositories/models/analytics_delivery_result.dart";
+import "../../repositories/models/session_options_repository_result.dart";
 import "../../repositories/permission_repository.dart";
 import "../../repositories/session_repository.dart";
 import "../../services/product_analytics_service.dart";
@@ -28,6 +30,7 @@ import "../../utils/model_filter/default_model_selector.dart";
 import "deferred_part_event_buffer.dart";
 import "prompt_send_queue.dart";
 import "queued_session_submission.dart";
+import "session_detail_notice.dart";
 import "session_detail_resolvers.dart";
 import "session_detail_state.dart";
 import "streaming_text_buffer.dart";
@@ -73,6 +76,7 @@ class SessionDetailCubit(
   static const _defaultModelSelector = DefaultModelSelector();
   ComposerDraft _composerDraft = _composerDraftRepository.readForSession(sessionId: _sessionId);
   final PromptSendQueue _promptQueue = PromptSendQueue();
+  final Set<String> _staleOptionsRecoveryAttemptedPromptIds = {};
 
   /// Monotonic counter stamped on parked sends, so a snapshot can settle only
   /// the parked prompts its fetch actually had a chance to observe.
@@ -98,6 +102,7 @@ class SessionDetailCubit(
   bool _waitingForConnection = false;
   bool _wasPaused = false;
   bool _wasConnected = false;
+  bool _stalePromptOptionsRefreshInFlight = false;
 
   // A disconnect invalidates capability snapshots that could authorize image sends.
   int _connectionGeneration = 0;
@@ -133,6 +138,9 @@ class SessionDetailCubit(
   /// screen can auto-open the permission modal.
   final StreamController<SesoriPermissionAsked> _permissionStream = StreamController.broadcast();
   Stream<SesoriPermissionAsked> get permissionStream => _permissionStream.stream;
+
+  final StreamController<SessionDetailNotice> _noticeStream = StreamController.broadcast();
+  Stream<SessionDetailNotice> get noticeStream => _noticeStream.stream;
 
   // ignore: no_slop_linter/prefer_required_named_parameters, public cubit constructor API
   this : super(const SessionDetailState.loading()) {
@@ -1051,8 +1059,7 @@ class SessionDetailCubit(
 
     final bool hasValidPersistedAgent = persistedAgent != null && agents.any((a) => a.name == persistedAgent);
     final bool hasValidPersistedModel =
-        persistedModel != null &&
-        providers.any((p) => p.id == persistedModel.providerID && p.models.containsKey(persistedModel.modelID));
+        persistedModel != null && _isModelAvailable(model: persistedModel, providers: providers);
 
     final newAgent = hasValidPersistedAgent ? persistedAgent : current.selectedAgent;
     final newModel = hasValidPersistedModel ? persistedModel : current.selectedAgentModel;
@@ -1563,6 +1570,7 @@ class SessionDetailCubit(
 
     final removed = _promptQueue.cancel(index);
     if (removed != null) {
+      _staleOptionsRecoveryAttemptedPromptIds.remove(removed.promptId);
       _emitQueueUpdate(current);
       _tryDrainQueue();
     }
@@ -1639,7 +1647,7 @@ class SessionDetailCubit(
   }
 
   Future<void> _drainQueuedMessages() async {
-    if (_promptQueue.isSending) return;
+    if (_promptQueue.isSending || _stalePromptOptionsRefreshInFlight) return;
     final current = state;
     if (current is! SessionDetailLoaded) return;
     if (!_isConnected) return;
@@ -1660,6 +1668,7 @@ class SessionDetailCubit(
 
     var sendSucceeded = false;
     var sendSettledElsewhere = false;
+    var optionsRecovered = false;
     try {
       final result = await _sessionRepository.sendMessage(
         sessionId: _sessionId,
@@ -1684,9 +1693,25 @@ class SessionDetailCubit(
           // outrunning those never blanks the row. A send whose echo already
           // landed was marked settled and is consumed here instead.
           _promptQueue.parkAccepted(epoch: ++_parkEpoch);
+          _staleOptionsRecoveryAttemptedPromptIds.remove(submission.promptId);
           _reportAcceptedSubmission(submission: submission);
-        case ErrorResponse():
+        case ErrorResponse(:final error) when SessionRepository.isStalePromptOptionsError(error: error):
           sendSettledElsewhere = !_promptQueue.failSend();
+          if (!sendSettledElsewhere) {
+            if (!_staleOptionsRecoveryAttemptedPromptIds.add(submission.promptId)) {
+              if (!isClosed) _noticeStream.add(SessionDetailNotice.promptOptionsRecoveryFailed);
+            } else {
+              _stalePromptOptionsRefreshInFlight = true;
+              try {
+                optionsRecovered = await _refreshStalePromptOptions();
+              } finally {
+                _stalePromptOptionsRefreshInFlight = false;
+              }
+            }
+          }
+        case ErrorResponse(:final error):
+          sendSettledElsewhere = !_promptQueue.failSend();
+          logw("Failed to send queued session submission", error);
       }
     } on Object catch (error, stackTrace) {
       sendSettledElsewhere = !_promptQueue.failSend();
@@ -1701,6 +1726,10 @@ class SessionDetailCubit(
       unawaited(_drainQueuedMessages());
       return;
     }
+    if (optionsRecovered && _isConnected) {
+      unawaited(_drainQueuedMessages());
+      return;
+    }
     if (!sendSucceeded && sendConnectionGeneration != _connectionGeneration && _isConnected) {
       unawaited(_drainQueuedMessages());
       return;
@@ -1711,6 +1740,162 @@ class SessionDetailCubit(
         unawaited(_drainQueuedMessages());
       }
     }
+  }
+
+  Future<bool> _refreshStalePromptOptions() async {
+    final current = state;
+    if (current is! SessionDetailLoaded) return false;
+    final pluginId = current.pluginId;
+    if (pluginId == null) {
+      logw("Could not refresh stale prompt options because the session plugin is unresolved");
+      if (!isClosed) _noticeStream.add(SessionDetailNotice.promptOptionsRecoveryFailed);
+      return false;
+    }
+
+    try {
+      final result = await _sessionRepository.loadSessionOptions(
+        projectId: _projectId,
+        pluginId: pluginId,
+        mode: SessionOptionsRequestMode.forceRefresh,
+      );
+      if (isClosed) return false;
+      final latest = state;
+      if (latest is! SessionDetailLoaded) return false;
+
+      if (result case SessionOptionsRepositoryAvailable(:final catalog)) {
+        final agents = catalog.agents
+            .whereType<AgentInfo>()
+            .where((agent) => !agent.hidden && agent.mode != AgentMode.subagent)
+            .toList();
+        final providers = catalog.providers;
+        final commands = catalog.commands;
+        final selectedAgent = agents.any((agent) => agent.name == latest.selectedAgent)
+            ? latest.selectedAgent
+            : (agents.firstOrNull?.name ?? "build");
+        final agentChanged = selectedAgent != latest.selectedAgent;
+        final preferredAgentModel = agents.firstWhereOrNull((agent) => agent.name == selectedAgent)?.model;
+        final selectedModelCandidate = agentChanged && preferredAgentModel != null
+            ? preferredAgentModel
+            : latest.selectedAgentModel;
+        final selectedModel = _validatedPromptModel(
+          candidate: selectedModelCandidate,
+          agents: agents,
+          providers: providers,
+        );
+
+        _promptQueue.replacePending(
+          update: (submission) => submission.withSelection(
+            agent: _validatedQueuedAgent(candidate: submission.agent, agents: agents),
+            agentModel: submission.agentModel == null
+                ? null
+                : _validatedPromptModel(
+                    candidate: submission.agentModel,
+                    agents: agents,
+                    providers: providers,
+                  ),
+          ),
+        );
+
+        emit(
+          latest.copyWith(
+            availableAgents: agents,
+            availableProviders: providers,
+            availableCommands: commands,
+            selectedAgent: selectedAgent,
+            selectedAgentModel: selectedModel,
+            availableVariants: _deriveAvailableVariants(
+              providers: providers,
+              model: selectedModel,
+            ),
+            stagedCommand: _resolveStagedCommand(
+              availableCommands: commands,
+              stagedCommand: latest.stagedCommand,
+            ),
+            queuedMessages: _visibleStagedItems(bridgePrompts: latest.bridgeQueuedPrompts),
+            sendingSubmission: _visibleStagedSending(bridgePrompts: latest.bridgeQueuedPrompts),
+          ),
+        );
+        _noticeStream.add(SessionDetailNotice.promptOptionsUpdated);
+        return true;
+      }
+
+      final error = switch (result) {
+        SessionOptionsRepositoryAvailable() => null,
+        SessionOptionsRepositoryCacheUnavailable() => null,
+        SessionOptionsRepositoryUnsupported() => null,
+        SessionOptionsRepositoryProjectNotFound(:final error) => error,
+        SessionOptionsRepositoryRefreshFailedRetained() => null,
+        SessionOptionsRepositoryRefreshFailedUnavailable() => null,
+        SessionOptionsRepositoryFailure(:final error) => error,
+      };
+      if (error == null) {
+        logw("Failed to refresh stale prompt options (${result.runtimeType.toString()})");
+      } else {
+        logw("Failed to refresh stale prompt options", error);
+      }
+      _noticeStream.add(SessionDetailNotice.promptOptionsRecoveryFailed);
+      return false;
+    } on Object catch (error, stackTrace) {
+      logw("Failed to refresh stale prompt options", error, stackTrace);
+      if (!isClosed) _noticeStream.add(SessionDetailNotice.promptOptionsRecoveryFailed);
+      return false;
+    }
+  }
+
+  String? _validatedQueuedAgent({
+    required String? candidate,
+    required List<AgentInfo> agents,
+  }) {
+    if (candidate == null || agents.any((agent) => agent.name == candidate)) return candidate;
+    return agents.firstOrNull?.name;
+  }
+
+  AgentModel? _validatedPromptModel({
+    required AgentModel? candidate,
+    required List<AgentInfo> agents,
+    required List<ProviderInfo> providers,
+  }) {
+    if (candidate == null) return null;
+    final model = _isModelAvailable(model: candidate, providers: providers)
+        ? candidate
+        : _fallbackAgentModel(agents: agents, providers: providers);
+    if (model == null) return null;
+    // Never leave a variant-offering model unset: the composer renders the
+    // first available variant when none is selected, so an unset one would
+    // display an effort the send does not carry.
+    return _withResolvedVariant(
+      model: model,
+      availableVariants: _deriveAvailableVariants(providers: providers, model: model),
+    );
+  }
+
+  bool _isModelAvailable({required AgentModel model, required List<ProviderInfo> providers}) {
+    return providers.any(
+      (provider) => provider.id == model.providerID && provider.models.containsKey(model.modelID),
+    );
+  }
+
+  AgentModel? _fallbackAgentModel({
+    required List<AgentInfo> agents,
+    required List<ProviderInfo> providers,
+  }) {
+    if (agents.firstOrNull?.model case final model?) return model;
+    // Walk every provider: the first may be misconfigured or fully
+    // deprecated and therefore have no selectable model.
+    for (final provider in providers) {
+      final picked = _defaultModelSelector.pickFromProvider(
+        models: provider.models,
+        defaultModelID: provider.defaultModelID,
+      );
+      if (picked != null) {
+        return AgentModel(
+          providerID: provider.id,
+          modelID: picked.id,
+          variant: null,
+        );
+      }
+    }
+    return null;
   }
 
   ComposerDraft get composerDraft => _composerDraft;
@@ -2059,6 +2244,7 @@ class SessionDetailCubit(
       // the next drain. The bridge clears its own queue as part of the abort.
       if (_promptQueue.isNotEmpty || _promptQueue.isSending || _promptQueue.awaitingBridge.isNotEmpty) {
         _promptQueue.clear();
+        _staleOptionsRecoveryAttemptedPromptIds.clear();
         _emitQueueUpdate(current is SessionDetailLoaded ? current : null);
       }
       final futures = <Future<ApiResponse<void>>>[_sessionRepository.abortSession(sessionId: _sessionId)];
@@ -2106,8 +2292,7 @@ class SessionDetailCubit(
 
     final bool hasValidPersistedAgent = persistedAgent != null && agents.any((a) => a.name == persistedAgent);
     final bool hasValidPersistedModel =
-        persistedModel != null &&
-        providers.any((p) => p.id == persistedModel.providerID && p.models.containsKey(persistedModel.modelID));
+        persistedModel != null && _isModelAvailable(model: persistedModel, providers: providers);
 
     final String defaultAgent = hasValidPersistedAgent
         ? persistedAgent
@@ -2127,37 +2312,9 @@ class SessionDetailCubit(
       MessageUser() || null => null,
     };
 
-    final AgentModel? defaultAgentModel;
-    if (hasValidPersistedModel) {
-      defaultAgentModel = persistedModel;
-    } else if (assistantAgentModel != null) {
-      defaultAgentModel = assistantAgentModel;
-    } else if (agents.isNotEmpty && agents.first.model != null) {
-      defaultAgentModel = agents.first.model;
-    } else if (providers.isNotEmpty) {
-      // Walk the provider list and use the first one that has at least
-      // one available model. Previously we only looked at `providers.first`,
-      // which silently produced `null` when the first provider happened
-      // to be misconfigured or fully deprecated.
-      AgentModel? pickedModel;
-      for (final provider in providers) {
-        final picked = _defaultModelSelector.pickFromProvider(
-          models: provider.models,
-          defaultModelID: provider.defaultModelID,
-        );
-        if (picked != null) {
-          pickedModel = AgentModel(
-            providerID: provider.id,
-            modelID: picked.id,
-            variant: null,
-          );
-          break;
-        }
-      }
-      defaultAgentModel = pickedModel;
-    } else {
-      defaultAgentModel = null;
-    }
+    final defaultAgentModel = hasValidPersistedModel
+        ? persistedModel
+        : (assistantAgentModel ?? _fallbackAgentModel(agents: agents, providers: providers));
 
     final availableVariants = _deriveAvailableVariants(
       providers: providers,
@@ -2287,6 +2444,7 @@ class SessionDetailCubit(
     _streamingBuffer.dispose();
     _questionStream.close();
     _permissionStream.close();
+    _noticeStream.close();
     return super.close();
   }
 }

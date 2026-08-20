@@ -123,6 +123,13 @@ defaults and queued client sends coherent.
   survive a transient disconnection while the session-detail cubit is alive,
   retain the agent, model, and variant selected at submission, and drain with
   the same prompt id so retries stay idempotent.
+- When a plugin rejects a send before acceptance because its agent, model, or
+  variant is no longer offered, the bridge deletes that options-cache row and
+  returns the typed `staleSessionOptions` rejection. The client force-refreshes
+  the options, replaces only unsupported queued selections without changing
+  FIFO order or prompt ids, warns the user, and retries once. A failed refresh
+  or second stale rejection leaves the prompt visible and queued instead of
+  disappearing or entering a retry loop.
 - Each plugin stamps that prompt id onto the user-message echo of its own
   dispatch, using the link its backend exposes — Claude's queue entry, ACP's
   accepted send, Pi's dispatcher, and, for Codex and OpenCode, an identifier
@@ -151,8 +158,8 @@ defaults and queued client sends coherent.
 | Level | Additional coverage |
 |---|---|
 | L1 Smoke | Live plugin, representative: a prompt streams assistant output and returns the session to idle. |
-| L2 Routine | Live plugin, representative: slash command returns on acceptance; prompt defaults update; abort stops a turn and reports its outcome; finalized messages are immediately readable from history. |
-| L3 Release | Client end to end (phone), every supporting production plugin: text, reasoning, tool, and status events stream with consistent normalization and the shared output bound; agent, model, and variant apply per send; streaming, composer, sending/queued feedback, and abort render. |
+| L2 Routine | Live plugin, representative: slash command returns on acceptance; prompt defaults update; abort stops a turn and reports its outcome; finalized messages are immediately readable from history; a recognized stale option returns the typed rejection only after cache invalidation. |
+| L3 Release | Client end to end (phone), every supporting production plugin: text, reasoning, tool, and status events stream with consistent normalization and the shared output bound; agent, model, and variant apply per send; streaming, composer, sending/queued feedback, and abort render; a stale selection refreshes, warns, and retries once without losing the queued prompt. |
 | L4 Extended | Relay integration, every supporting production plugin: a slow or unresponsive plugin leaves other sessions, plugins, and the relay responsive; archived sends and queued-prompt cancels are refused without racing archiving; disconnect and reconnect mid-turn resumes without lost or duplicated parts; bridge-owned prompts survive leaving and reopening in order and appear on a second client; a prompt waiting at a dispatch boundary can be cancelled; a permission reply lands while a command or selection-changing prompt waits behind the running turn; a second client observes the same turn and steering prompt. |
 | L5 Full | Client end to end, every supporting production plugin: retry status surfaces with attempt and timing; concurrent sends across sessions and plugins interleave without ordering damage; background and resume mid-turn recovers live state; an aborted turn triggers no completion notification. |
 
@@ -177,7 +184,7 @@ has started.
   removes a backend-provided message timestamp.
 - Internal backend command records or synthetic model attribution appear in
   the conversation or replayed history.
-- Prompt defaults regress, an approved plan exit does not restore Default
+- Prompt defaults regress, an approved plan exit does not restore Agent
   across clients and restart, or a defaults-write failure fails the send.
 - Reopening or importing a session silently switches its latest transcript
   model to a stale catalog default on the next send.
@@ -193,6 +200,11 @@ has started.
   bridge acceptance or backend startup is still pending, or queued feedback
   uses a visually unrelated or composer-pinned surface, or renders authored
   Markdown as literal syntax.
+- A stale-option rejection retains the rejected cache row, waits on an
+  unrelated options discovery before answering, remains silent, drops the
+  staged prompt, changes FIFO order or prompt identity, refreshes and retries
+  without a bound, or leaves a corrected selection on a variant the picker does
+  not display.
 - An abort, permission reply, or question reply stalls behind a send to a
   busy session on the same session lane.
 - Recovery or interruption artifacts from an aborted turn appear in the next
@@ -233,6 +245,7 @@ has started.
 - Bridge: `bridge/app/lib/src/bridge/services/` (prompt, abort, dispatcher,
   event, chat history), `lib/src/bridge/sse/`, and their tests
 - Contract: `bridge/sesori_plugin_interface/lib/src/bridge_plugin.dart`;
+  `shared/sesori_shared/lib/src/models/sesori/send_prompt_error_response.dart`;
   `shared/sesori_shared/lib/src/models/sesori/sesori_sse_event.dart`
 - Hermes: `bridge/sesori_plugin_hermes/` and the shared ACP plugin implementation
 - Client: `client/module_core/lib/src/cubits/session_detail/`,

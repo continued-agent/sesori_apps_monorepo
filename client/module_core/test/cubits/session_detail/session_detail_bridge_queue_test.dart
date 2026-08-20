@@ -1,4 +1,5 @@
 import "dart:async";
+import "dart:convert";
 
 import "package:mocktail/mocktail.dart";
 import "package:rxdart/rxdart.dart";
@@ -7,9 +8,12 @@ import "package:sesori_dart_core/src/capabilities/server_connection/models/conne
 import "package:sesori_dart_core/src/capabilities/server_connection/models/sse_event.dart";
 import "package:sesori_dart_core/src/capabilities/server_connection/server_connection_config.dart";
 import "package:sesori_dart_core/src/cubits/session_detail/session_detail_cubit.dart";
+import "package:sesori_dart_core/src/cubits/session_detail/session_detail_notice.dart";
 import "package:sesori_dart_core/src/cubits/session_detail/session_detail_state.dart";
 import "package:sesori_dart_core/src/foundation/models/composer/composer_draft.dart";
+import "package:sesori_dart_core/src/foundation/models/session_options/session_options_request_mode.dart";
 import "package:sesori_dart_core/src/platform/notification_canceller.dart";
+import "package:sesori_dart_core/src/repositories/models/session_options_repository_result.dart";
 import "package:sesori_dart_core/src/repositories/permission_repository.dart";
 import "package:sesori_dart_core/src/services/session_detail_load_service.dart";
 import "package:sesori_shared/sesori_shared.dart";
@@ -54,6 +58,52 @@ const _queuedPrompt = QueuedSessionPrompt(
   createdAt: 100,
 );
 
+SessionOptionsRepositoryResult _freshClaudeOptions() => SessionOptionsRepositoryAvailable(
+  isStale: false,
+  catalog: SessionOptionsCatalog(
+    agents: const [
+      AgentInfo(name: "Agent", description: "Agent", model: null, mode: AgentMode.primary),
+      AgentInfo(name: "Plan", description: "Plan", model: null, mode: AgentMode.primary),
+    ],
+    providers: const [],
+    providersConnectedOnly: false,
+    commands: const [],
+  ),
+);
+
+ProviderListResponse _providerDataWithVariants(List<String> variants) => ProviderListResponse(
+  items: [
+    ProviderInfo(
+      id: "anthropic",
+      name: "Anthropic",
+      defaultModelID: "claude-opus",
+      models: {
+        "claude-opus": ProviderModel(
+          id: "claude-opus",
+          providerID: "anthropic",
+          name: "Opus",
+          variants: variants,
+          family: null,
+          releaseDate: null,
+        ),
+      },
+    ),
+  ],
+  connectedOnly: false,
+);
+
+SessionOptionsRepositoryResult _claudeOptionsWithVariants(List<String> variants) => SessionOptionsRepositoryAvailable(
+  isStale: false,
+  catalog: SessionOptionsCatalog(
+    agents: const [
+      AgentInfo(name: "Agent", description: "Agent", model: null, mode: AgentMode.primary),
+    ],
+    providers: _providerDataWithVariants(variants).items,
+    providersConnectedOnly: false,
+    commands: const [],
+  ),
+);
+
 void main() {
   const connectedStatus = ConnectionStatus.connected(
     config: ServerConnectionConfig(relayHost: "relay.example.com", authToken: "token"),
@@ -90,6 +140,9 @@ void main() {
 
     Future<SessionDetailCubit> createLoadedCubit({
       List<QueuedSessionPrompt> snapshotQueue = const [],
+      List<AgentInfo> agents = const [],
+      ProviderListResponse? providerData,
+      SessionPromptDefaults? promptDefaults,
     }) async {
       final mockLoadService = MockSessionDetailLoadService();
       when(
@@ -110,11 +163,11 @@ void main() {
             bridgeQueuedPrompts: snapshotQueue,
             childSessions: const <Session>[],
             statuses: const <String, SessionStatus>{},
-            agents: const <AgentInfo>[],
-            providerData: null,
+            agents: agents,
+            providerData: providerData,
             commands: const <CommandInfo>[],
             canonicalSessionTitle: null,
-            promptDefaults: null,
+            promptDefaults: promptDefaults,
             isRootSession: true,
             isArchived: false,
           ),
@@ -179,6 +232,300 @@ void main() {
       final cubit = await createLoadedCubit(snapshotQueue: const [_queuedPrompt]);
 
       expect((cubit.state as SessionDetailLoaded).bridgeQueuedPrompts, const [_queuedPrompt]);
+    });
+
+    test("refreshes stale options and retries the queued submission with a supported agent", () async {
+      final staleError = ApiError.nonSuccessCode(
+        errorCode: 409,
+        rawErrorString: jsonEncode(
+          const SendPromptErrorResponse(
+            code: SendPromptErrorCode.staleSessionOptions,
+            message: "unsupported Claude agent",
+          ).toJson(),
+        ),
+      );
+      when(
+        () => mockSessionRepository.loadSessionOptions(
+          projectId: "project-1",
+          pluginId: "claude",
+          mode: SessionOptionsRequestMode.forceRefresh,
+        ),
+      ).thenAnswer((_) async => _freshClaudeOptions());
+      var sendCount = 0;
+      final promptIds = <String>[];
+      when(
+        () => mockSessionRepository.sendMessage(
+          sessionId: _sessionId,
+          promptId: any(named: "promptId"),
+          text: "hello",
+          attachments: const [],
+          agent: any(named: "agent"),
+          model: null,
+          variant: null,
+          command: null,
+        ),
+      ).thenAnswer((invocation) async {
+        sendCount++;
+        promptIds.add(invocation.namedArguments[#promptId]! as String);
+        return sendCount == 1 ? ApiResponse.error(staleError) : ApiResponse.success(null);
+      });
+      final cubit = await createLoadedCubit(
+        agents: const [
+          AgentInfo(name: "Default", description: "Default", model: null, mode: AgentMode.primary),
+        ],
+        promptDefaults: const SessionPromptDefaults(agent: "Default", model: null),
+      );
+      final notices = <SessionDetailNotice>[];
+      final noticeSubscription = cubit.noticeStream.listen(notices.add);
+      addTearDown(noticeSubscription.cancel);
+
+      await cubit.sendMessage(
+        text: "hello",
+        command: null,
+        inputMode: ComposerInputMode.typed,
+        attachments: const [],
+      );
+      for (var attempt = 0; attempt < 20 && sendCount < 2; attempt++) {
+        await Future<void>.delayed(Duration.zero);
+      }
+      await Future<void>.delayed(Duration.zero);
+
+      expect(sendCount, 2);
+      expect(promptIds.toSet(), hasLength(1));
+      verify(
+        () => mockSessionRepository.sendMessage(
+          sessionId: _sessionId,
+          promptId: any(named: "promptId"),
+          text: "hello",
+          attachments: const [],
+          agent: "Default",
+          model: null,
+          variant: null,
+          command: null,
+        ),
+      ).called(1);
+      verify(
+        () => mockSessionRepository.sendMessage(
+          sessionId: _sessionId,
+          promptId: any(named: "promptId"),
+          text: "hello",
+          attachments: const [],
+          agent: "Agent",
+          model: null,
+          variant: null,
+          command: null,
+        ),
+      ).called(1);
+      final state = cubit.state as SessionDetailLoaded;
+      expect(state.selectedAgent, "Agent");
+      expect(state.queuedMessages, isEmpty);
+      expect(state.sendingSubmission, isNull);
+      expect(state.awaitingBridgeSubmissions.map((submission) => submission.promptId), [promptIds.first]);
+      expect(notices, [SessionDetailNotice.promptOptionsUpdated]);
+    });
+
+    test("parks the prompt after one stale-options recovery attempt", () async {
+      final staleError = ApiError.nonSuccessCode(
+        errorCode: 409,
+        rawErrorString: jsonEncode(
+          const SendPromptErrorResponse(
+            code: SendPromptErrorCode.staleSessionOptions,
+            message: "unsupported Claude agent",
+          ).toJson(),
+        ),
+      );
+      when(
+        () => mockSessionRepository.loadSessionOptions(
+          projectId: "project-1",
+          pluginId: "claude",
+          mode: SessionOptionsRequestMode.forceRefresh,
+        ),
+      ).thenAnswer((_) async => _freshClaudeOptions());
+      var sendCount = 0;
+      when(
+        () => mockSessionRepository.sendMessage(
+          sessionId: _sessionId,
+          promptId: any(named: "promptId"),
+          text: "hello",
+          attachments: const [],
+          agent: any(named: "agent"),
+          model: null,
+          variant: null,
+          command: null,
+        ),
+      ).thenAnswer((_) async {
+        sendCount++;
+        return ApiResponse.error(staleError);
+      });
+      final cubit = await createLoadedCubit(
+        agents: const [
+          AgentInfo(name: "Default", description: "Default", model: null, mode: AgentMode.primary),
+        ],
+        promptDefaults: const SessionPromptDefaults(agent: "Default", model: null),
+      );
+      final notices = <SessionDetailNotice>[];
+      final noticeSubscription = cubit.noticeStream.listen(notices.add);
+      addTearDown(noticeSubscription.cancel);
+
+      await cubit.sendMessage(
+        text: "hello",
+        command: null,
+        inputMode: ComposerInputMode.typed,
+        attachments: const [],
+      );
+      for (var attempt = 0; attempt < 20 && sendCount < 2; attempt++) {
+        await Future<void>.delayed(Duration.zero);
+      }
+      await Future<void>.delayed(Duration.zero);
+
+      expect(sendCount, 2);
+      verify(
+        () => mockSessionRepository.loadSessionOptions(
+          projectId: "project-1",
+          pluginId: "claude",
+          mode: SessionOptionsRequestMode.forceRefresh,
+        ),
+      ).called(1);
+      final state = cubit.state as SessionDetailLoaded;
+      expect(state.queuedMessages.single.agent, "Agent");
+      expect(state.sendingSubmission, isNull);
+      expect(state.awaitingBridgeSubmissions, isEmpty);
+      expect(
+        notices,
+        [SessionDetailNotice.promptOptionsUpdated, SessionDetailNotice.promptOptionsRecoveryFailed],
+      );
+    });
+
+    test("does not restart stale-options recovery after forced refresh fails", () async {
+      final staleError = ApiError.nonSuccessCode(
+        errorCode: 409,
+        rawErrorString: jsonEncode(
+          const SendPromptErrorResponse(
+            code: SendPromptErrorCode.staleSessionOptions,
+            message: "unsupported Claude agent",
+          ).toJson(),
+        ),
+      );
+      when(
+        () => mockSessionRepository.loadSessionOptions(
+          projectId: "project-1",
+          pluginId: "claude",
+          mode: SessionOptionsRequestMode.forceRefresh,
+        ),
+      ).thenAnswer((_) async => const SessionOptionsRepositoryRefreshFailedUnavailable());
+      var sendCount = 0;
+      when(
+        () => mockSessionRepository.sendMessage(
+          sessionId: _sessionId,
+          promptId: any(named: "promptId"),
+          text: any(named: "text"),
+          attachments: const [],
+          agent: any(named: "agent"),
+          model: null,
+          variant: null,
+          command: null,
+        ),
+      ).thenAnswer((_) async {
+        sendCount++;
+        return ApiResponse.error(staleError);
+      });
+      final cubit = await createLoadedCubit(
+        agents: const [
+          AgentInfo(name: "Default", description: "Default", model: null, mode: AgentMode.primary),
+        ],
+        promptDefaults: const SessionPromptDefaults(agent: "Default", model: null),
+      );
+
+      await cubit.sendMessage(
+        text: "first",
+        command: null,
+        inputMode: ComposerInputMode.typed,
+        attachments: const [],
+      );
+      await cubit.sendMessage(
+        text: "second",
+        command: null,
+        inputMode: ComposerInputMode.typed,
+        attachments: const [],
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      expect(sendCount, 2);
+      verify(
+        () => mockSessionRepository.loadSessionOptions(
+          projectId: "project-1",
+          pluginId: "claude",
+          mode: SessionOptionsRequestMode.forceRefresh,
+        ),
+      ).called(1);
+      final state = cubit.state as SessionDetailLoaded;
+      expect(state.queuedMessages.map((submission) => submission.text), ["first", "second"]);
+      expect(state.sendingSubmission, isNull);
+      expect(state.awaitingBridgeSubmissions, isEmpty);
+    });
+
+    test("retries a withdrawn variant at a supported one rather than unsetting it", () async {
+      final staleError = ApiError.nonSuccessCode(
+        errorCode: 409,
+        rawErrorString: jsonEncode(
+          const SendPromptErrorResponse(
+            code: SendPromptErrorCode.staleSessionOptions,
+            message: "unsupported Claude effort",
+          ).toJson(),
+        ),
+      );
+      when(
+        () => mockSessionRepository.loadSessionOptions(
+          projectId: "project-1",
+          pluginId: "claude",
+          mode: SessionOptionsRequestMode.forceRefresh,
+        ),
+      ).thenAnswer((_) async => _claudeOptionsWithVariants(const ["low"]));
+      var sendCount = 0;
+      final sentVariants = <SessionVariant?>[];
+      when(
+        () => mockSessionRepository.sendMessage(
+          sessionId: _sessionId,
+          promptId: any(named: "promptId"),
+          text: "hello",
+          attachments: const [],
+          agent: any(named: "agent"),
+          model: any(named: "model"),
+          variant: any(named: "variant"),
+          command: null,
+        ),
+      ).thenAnswer((invocation) async {
+        sendCount++;
+        sentVariants.add(invocation.namedArguments[#variant] as SessionVariant?);
+        return sendCount == 1 ? ApiResponse.error(staleError) : ApiResponse.success(null);
+      });
+      final cubit = await createLoadedCubit(
+        agents: const [
+          AgentInfo(name: "Agent", description: "Agent", model: null, mode: AgentMode.primary),
+        ],
+        providerData: _providerDataWithVariants(const ["low", "high"]),
+        promptDefaults: const SessionPromptDefaults(
+          agent: "Agent",
+          model: AgentModel(providerID: "anthropic", modelID: "claude-opus", variant: "high"),
+        ),
+      );
+      expect((cubit.state as SessionDetailLoaded).selectedAgentModel?.variant, "high");
+
+      await cubit.sendMessage(
+        text: "hello",
+        command: null,
+        inputMode: ComposerInputMode.typed,
+        attachments: const [],
+      );
+      for (var attempt = 0; attempt < 20 && sendCount < 2; attempt++) {
+        await Future<void>.delayed(Duration.zero);
+      }
+
+      expect(sendCount, 2);
+      // The composer renders the first available variant when none is
+      // selected, so recovery must land on a real one instead of unsetting it.
+      expect(sentVariants, const [SessionVariant(id: "high"), SessionVariant(id: "low")]);
+      expect((cubit.state as SessionDetailLoaded).selectedAgentModel?.variant, "low");
     });
 
     test("replaces the queue from the SSE event and drops the accepted local copy", () async {

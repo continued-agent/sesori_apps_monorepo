@@ -52,6 +52,8 @@ class SessionOptionsService({
 
   final Map<String, PluginSessionOptionsScope> _pluginScopes = Map<String, PluginSessionOptionsScope>.unmodifiable(pluginScopes);
   final Map<SessionOptionsCacheKey, _RefreshCoordinator> _refreshes = {};
+  final Map<SessionOptionsCacheKey, Future<void>> _invalidations = {};
+  final Map<SessionOptionsCacheKey, int> _invalidationEpochs = {};
 
   Future<SessionOptionsOutcome> loadDynamic({
     required String pluginId,
@@ -59,8 +61,11 @@ class SessionOptionsService({
   }) async {
     final resolved = await _resolve(pluginId: pluginId, projectId: projectId);
     if (resolved == null) return const SessionOptionsProjectNotFound();
+    final cacheEpoch = _invalidationEpoch(key: resolved.key);
     final cached = await _readValid(key: resolved.key);
-    if (cached != null && await _isCurrentResolution(resolved: resolved)) {
+    if (cached != null &&
+        await _isCurrentResolution(resolved: resolved) &&
+        await _isCurrentInvalidationEpoch(key: resolved.key, expected: cacheEpoch)) {
       return _servedFromCache(entry: cached);
     }
 
@@ -68,9 +73,15 @@ class SessionOptionsService({
       key: resolved.key,
       intent: _RefreshIntent.reuse,
       generation: null,
-      operation: () async {
+      operation: (invalidationEpoch) async {
+        if (!await _isCurrentInvalidationEpoch(key: resolved.key, expected: invalidationEpoch)) {
+          return _invalidatedRefreshOutcome(automatic: false);
+        }
         final newlyCached = await _readValid(key: resolved.key);
         final isCurrentResolution = await _isCurrentResolution(resolved: resolved);
+        if (!await _isCurrentInvalidationEpoch(key: resolved.key, expected: invalidationEpoch)) {
+          return _invalidatedRefreshOutcome(automatic: false);
+        }
         if (newlyCached != null && isCurrentResolution) {
           return _servedFromCache(entry: newlyCached);
         }
@@ -83,12 +94,16 @@ class SessionOptionsService({
           discoveryMode: PluginSessionOptionsDiscoveryMode.reuse,
           expectedGeneration: null,
           automatic: false,
+          invalidationEpoch: invalidationEpoch,
         );
       },
     );
     if (outcome case SessionOptionsRefreshFailedRetained(:final failure)) {
+      final recoveryEpoch = _invalidationEpoch(key: resolved.key);
       final concurrentlyAvailable = await _readValid(key: resolved.key);
-      if (concurrentlyAvailable != null && await _isCurrentResolution(resolved: resolved)) {
+      if (concurrentlyAvailable != null &&
+          await _isCurrentResolution(resolved: resolved) &&
+          await _isCurrentInvalidationEpoch(key: resolved.key, expected: recoveryEpoch)) {
         return SessionOptionsAvailable(response: concurrentlyAvailable.response);
       }
       return SessionOptionsRefreshFailedUnavailable(failure: failure);
@@ -112,9 +127,13 @@ class SessionOptionsService({
   }) async {
     final resolved = await _resolve(pluginId: pluginId, projectId: projectId);
     if (resolved == null) return const SessionOptionsProjectNotFound();
+    final cacheEpoch = _invalidationEpoch(key: resolved.key);
     final cached = await _readValid(key: resolved.key);
     if (cached == null) return const SessionOptionsCacheUnavailable();
     if (resolved.key is ProjectSessionOptionsCacheKey && !await _isCurrentResolution(resolved: resolved)) {
+      return const SessionOptionsCacheUnavailable();
+    }
+    if (!await _isCurrentInvalidationEpoch(key: resolved.key, expected: cacheEpoch)) {
       return const SessionOptionsCacheUnavailable();
     }
     return SessionOptionsAvailable(response: cached.response);
@@ -130,14 +149,63 @@ class SessionOptionsService({
       key: resolved.key,
       intent: _RefreshIntent.forced,
       generation: null,
-      operation: () => _refresh(
+      operation: (invalidationEpoch) => _refresh(
         resolved: resolved,
         activation: SessionOptionsCaptureActivation.mayActivate,
         discoveryMode: PluginSessionOptionsDiscoveryMode.refresh,
         expectedGeneration: null,
         automatic: false,
+        invalidationEpoch: invalidationEpoch,
       ),
     );
+  }
+
+  /// Discards an options snapshot proven stale by a rejected send. The client
+  /// that receives the typed rejection then requests forced discovery; the
+  /// rejected snapshot cannot be retained if that discovery fails.
+  ///
+  /// The delete runs immediately, alongside any discovery already in flight,
+  /// so it never waits behind a plugin catalog probe. The epoch prevents work
+  /// requested before the rejection from republishing the rejected snapshot.
+  Future<void> invalidateRejectedSelection({
+    required String pluginId,
+    required String projectId,
+  }) async {
+    final resolved = await _resolve(pluginId: pluginId, projectId: projectId);
+    if (resolved == null) return;
+    final key = resolved.key;
+    _invalidationEpochs[key] = _invalidationEpoch(key: key) + 1;
+    Future<void> delete() => _repository.delete(key: key);
+    final prior = _invalidations[key];
+    final invalidation = prior == null
+        ? Future<void>.sync(delete)
+        : prior.then((_) => delete(), onError: (Object _, StackTrace _) => delete());
+    _invalidations[key] = invalidation;
+    try {
+      await invalidation;
+    } finally {
+      // Identity-checked: a later rejection may already have chained its own
+      // delete onto this one and now owns the slot.
+      _invalidations.removeWhere((pending, entry) => pending == key && identical(entry, invalidation));
+    }
+  }
+
+  /// Holds a commit until every delete already issued for [key] has settled,
+  /// so a snapshot captured after a rejection survives the delete that raced it.
+  Future<void> _awaitInvalidation({required SessionOptionsCacheKey key}) async {
+    final invalidation = _invalidations[key];
+    if (invalidation == null) return;
+    await invalidation.then<void>((_) {}, onError: (Object _, StackTrace _) {});
+  }
+
+  int _invalidationEpoch({required SessionOptionsCacheKey key}) => _invalidationEpochs[key] ?? 0;
+
+  Future<bool> _isCurrentInvalidationEpoch({
+    required SessionOptionsCacheKey key,
+    required int expected,
+  }) async {
+    await _awaitInvalidation(key: key);
+    return _invalidationEpoch(key: key) == expected;
   }
 
   Future<SessionOptionsOutcome> refreshActiveOnly({
@@ -154,12 +222,13 @@ class SessionOptionsService({
       key: resolved.key,
       intent: _RefreshIntent.reuse,
       generation: generation,
-      operation: () => _refresh(
+      operation: (invalidationEpoch) => _refresh(
         resolved: resolved,
         activation: SessionOptionsCaptureActivation.activeOnly,
         discoveryMode: PluginSessionOptionsDiscoveryMode.reuse,
         expectedGeneration: generation,
         automatic: true,
+        invalidationEpoch: invalidationEpoch,
       ),
     );
   }
@@ -183,12 +252,13 @@ class SessionOptionsService({
       key: resolved.key,
       intent: _RefreshIntent.reuse,
       generation: generation,
-      operation: () => _refresh(
+      operation: (invalidationEpoch) => _refresh(
         resolved: resolved,
         activation: SessionOptionsCaptureActivation.activeOnly,
         discoveryMode: PluginSessionOptionsDiscoveryMode.reuse,
         expectedGeneration: generation,
         automatic: true,
+        invalidationEpoch: invalidationEpoch,
       ),
     );
   }
@@ -199,7 +269,11 @@ class SessionOptionsService({
     required PluginSessionOptionsDiscoveryMode discoveryMode,
     required int? expectedGeneration,
     required bool automatic,
+    required int invalidationEpoch,
   }) async {
+    if (!await _isCurrentInvalidationEpoch(key: resolved.key, expected: invalidationEpoch)) {
+      return _invalidatedRefreshOutcome(automatic: automatic);
+    }
     if (activation == SessionOptionsCaptureActivation.activeOnly) {
       if (expectedGeneration != null &&
           !_repository.isCurrentGeneration(
@@ -232,6 +306,7 @@ class SessionOptionsService({
         message: "Session options capture failed for plugin ${resolved.key.pluginId}",
         error: error,
         stackTrace: stackTrace,
+        invalidationEpoch: invalidationEpoch,
       );
     }
 
@@ -245,16 +320,27 @@ class SessionOptionsService({
           message: "Session options discovery failed for plugin ${resolved.key.pluginId}",
           error: null,
           stackTrace: null,
+          invalidationEpoch: invalidationEpoch,
         );
       case SessionOptionsCaptureObserved():
         break;
     }
 
+    if (!await _isCurrentInvalidationEpoch(key: resolved.key, expected: invalidationEpoch)) {
+      return _invalidatedRefreshOutcome(automatic: automatic);
+    }
+
     if (!await _isCurrentResolution(resolved: resolved)) {
       return _movedProjectOutcome(automatic: automatic);
     }
+    if (!await _isCurrentInvalidationEpoch(key: resolved.key, expected: invalidationEpoch)) {
+      return _invalidatedRefreshOutcome(automatic: automatic);
+    }
 
     final retained = await _readValid(key: resolved.key);
+    if (!await _isCurrentInvalidationEpoch(key: resolved.key, expected: invalidationEpoch)) {
+      return _invalidatedRefreshOutcome(automatic: automatic);
+    }
     if (!_canReplace(observation: capture, retained: retained)) {
       return SessionOptionsAvailable(response: retained!.response);
     }
@@ -266,6 +352,7 @@ class SessionOptionsService({
       retained: retained,
       automatic: automatic,
       expectedGeneration: expectedGeneration,
+      invalidationEpoch: invalidationEpoch,
     );
   }
 
@@ -276,6 +363,7 @@ class SessionOptionsService({
     required SessionOptionsCacheEntry? retained,
     required bool automatic,
     required int? expectedGeneration,
+    required int invalidationEpoch,
   }) async {
     final firstCommit = await _tryCommit(
       resolved: resolved,
@@ -284,6 +372,7 @@ class SessionOptionsService({
       retained: retained,
       automatic: automatic,
       expectedGeneration: expectedGeneration,
+      invalidationEpoch: invalidationEpoch,
     );
     switch (firstCommit) {
       case _CommitFailed(:final outcome):
@@ -295,6 +384,9 @@ class SessionOptionsService({
     }
 
     final newest = await _readValid(key: resolved.key);
+    if (!await _isCurrentInvalidationEpoch(key: resolved.key, expected: invalidationEpoch)) {
+      return _invalidatedRefreshOutcome(automatic: automatic);
+    }
     if (!_canReplace(observation: observation, retained: newest)) {
       return SessionOptionsAvailable(response: newest!.response);
     }
@@ -306,6 +398,7 @@ class SessionOptionsService({
       retained: newest,
       automatic: automatic,
       expectedGeneration: expectedGeneration,
+      invalidationEpoch: invalidationEpoch,
     );
     switch (secondCommit) {
       case _CommitFailed(:final outcome):
@@ -314,6 +407,9 @@ class SessionOptionsService({
         return SessionOptionsAvailable(response: observation.response);
       case _CommitConflict():
         final latest = await _readValid(key: resolved.key);
+        if (!await _isCurrentInvalidationEpoch(key: resolved.key, expected: invalidationEpoch)) {
+          return _invalidatedRefreshOutcome(automatic: automatic);
+        }
         Log.w(
           "Session options cache commit conflicted twice for plugin ${resolved.key.pluginId}; retaining newest cache",
         );
@@ -332,10 +428,14 @@ class SessionOptionsService({
     required SessionOptionsCacheEntry? retained,
     required bool automatic,
     required int? expectedGeneration,
+    required int invalidationEpoch,
   }) async {
     final key = resolved.key;
     if (!await _isCurrentResolution(resolved: resolved)) {
       return _CommitFailed(outcome: _movedProjectOutcome(automatic: automatic));
+    }
+    if (!await _isCurrentInvalidationEpoch(key: key, expected: invalidationEpoch)) {
+      return _CommitFailed(outcome: _invalidatedRefreshOutcome(automatic: automatic));
     }
     final expectedRevision = retained?.revision;
     final candidate = SessionOptionsCacheEntry(
@@ -351,8 +451,21 @@ class SessionOptionsService({
         expectedRevision: expectedRevision,
         generation: observation.generation,
       );
+      if (!await _isCurrentInvalidationEpoch(key: key, expected: invalidationEpoch)) {
+        if (committed) {
+          try {
+            await _repository.deleteIfRevision(key: key, expectedRevision: candidate.revision);
+          } on Object catch (error, stackTrace) {
+            Log.w("Failed to discard invalidated session options for plugin ${key.pluginId}", error, stackTrace);
+          }
+        }
+        return _CommitFailed(outcome: _invalidatedRefreshOutcome(automatic: automatic));
+      }
       return committed ? const _CommitSucceeded() : const _CommitConflict();
     } on Object catch (error, stackTrace) {
+      if (!await _isCurrentInvalidationEpoch(key: key, expected: invalidationEpoch)) {
+        return _CommitFailed(outcome: _invalidatedRefreshOutcome(automatic: automatic));
+      }
       if (_becameStale(pluginId: key.pluginId, expectedGeneration: expectedGeneration)) {
         return const _CommitFailed(outcome: SessionOptionsAutomaticNoOp());
       }
@@ -413,11 +526,21 @@ class SessionOptionsService({
     required String message,
     required Object? error,
     required StackTrace? stackTrace,
+    required int invalidationEpoch,
   }) async {
+    if (!await _isCurrentInvalidationEpoch(key: resolved.key, expected: invalidationEpoch)) {
+      return _invalidatedRefreshOutcome(automatic: automatic);
+    }
     if (!await _isCurrentResolution(resolved: resolved)) {
       return _movedProjectOutcome(automatic: automatic);
     }
+    if (!await _isCurrentInvalidationEpoch(key: resolved.key, expected: invalidationEpoch)) {
+      return _invalidatedRefreshOutcome(automatic: automatic);
+    }
     final retained = await _readValid(key: resolved.key);
+    if (!await _isCurrentInvalidationEpoch(key: resolved.key, expected: invalidationEpoch)) {
+      return _invalidatedRefreshOutcome(automatic: automatic);
+    }
     return _refreshFailure(
       retained: retained,
       message: message,
@@ -438,6 +561,14 @@ class SessionOptionsService({
   }
 
   SessionOptionsOutcome _movedProjectOutcome({required bool automatic}) {
+    return automatic
+        ? const SessionOptionsAutomaticNoOp()
+        : const SessionOptionsRefreshFailedUnavailable(
+            failure: SessionOptionsKnownRefreshFailure(),
+          );
+  }
+
+  SessionOptionsOutcome _invalidatedRefreshOutcome({required bool automatic}) {
     return automatic
         ? const SessionOptionsAutomaticNoOp()
         : const SessionOptionsRefreshFailedUnavailable(
@@ -531,67 +662,42 @@ class SessionOptionsService({
     required SessionOptionsCacheKey key,
     required _RefreshIntent intent,
     required int? generation,
-    required Future<SessionOptionsOutcome> Function() operation,
+    required Future<SessionOptionsOutcome> Function(int invalidationEpoch) operation,
   }) {
+    final invalidationEpoch = _invalidationEpoch(key: key);
     final existing = _refreshes[key];
     if (existing != null) {
-      final forcedTail = existing.forcedTail;
-      if (forcedTail != null) return forcedTail;
-      if (existing.intent == _RefreshIntent.forced) {
-        return existing.running;
+      final sameEpoch = existing.invalidationEpoch == invalidationEpoch;
+      if (sameEpoch &&
+          (existing.intent == _RefreshIntent.forced ||
+              (intent == _RefreshIntent.reuse && existing.generation == generation))) {
+        return existing.terminal;
       }
 
-      if (intent == _RefreshIntent.reuse) {
-        if (existing.generation == generation) return existing.running;
-        if (existing.reuseTail != null && existing.reuseTailGeneration == generation) {
-          return existing.reuseTail!;
-        }
-
-        final predecessor = existing.reuseTail ?? existing.running;
-        late final Future<SessionOptionsOutcome> tail;
-        Future<SessionOptionsOutcome> startReuse() {
-          existing
-            ..intent = _RefreshIntent.reuse
-            ..generation = generation
-            ..running = tail;
-          return Future<SessionOptionsOutcome>.sync(operation);
-        }
-
-        tail = predecessor.then(
-          (_) => startReuse(),
-          onError: (Object _, StackTrace _) => startReuse(),
-        );
-        existing
-          ..reuseTail = tail
-          ..reuseTailGeneration = generation;
-        _removeAfterCompletion(key: key, coordinator: existing, future: tail);
-        return tail;
+      final predecessor = existing.terminal;
+      Future<SessionOptionsOutcome> start() {
+        return Future<SessionOptionsOutcome>.sync(() => operation(invalidationEpoch));
       }
 
-      final predecessor = existing.reuseTail ?? existing.running;
-      late final Future<SessionOptionsOutcome> tail;
-      Future<SessionOptionsOutcome> startForced() {
-        existing
-          ..intent = _RefreshIntent.forced
-          ..generation = null
-          ..running = tail;
-        return Future<SessionOptionsOutcome>.sync(operation);
-      }
-
-      tail = predecessor.then(
-        (_) => startForced(),
-        onError: (Object _, StackTrace _) => startForced(),
+      final tail = predecessor.then(
+        (_) => start(),
+        onError: (Object _, StackTrace _) => start(),
       );
-      existing.forcedTail = tail;
+      existing
+        ..intent = intent
+        ..generation = generation
+        ..invalidationEpoch = invalidationEpoch
+        ..terminal = tail;
       _removeAfterCompletion(key: key, coordinator: existing, future: tail);
       return tail;
     }
 
-    final running = Future<SessionOptionsOutcome>.sync(operation);
+    final running = Future<SessionOptionsOutcome>.sync(() => operation(invalidationEpoch));
     final coordinator = _RefreshCoordinator(
       intent: intent,
       generation: generation,
-      running: running,
+      invalidationEpoch: invalidationEpoch,
+      terminal: running,
     );
     _refreshes[key] = coordinator;
     _removeAfterCompletion(key: key, coordinator: coordinator, future: running);
@@ -604,8 +710,7 @@ class SessionOptionsService({
     required Future<SessionOptionsOutcome> future,
   }) {
     void remove() {
-      final terminal = coordinator.forcedTail ?? coordinator.reuseTail ?? coordinator.running;
-      if (identical(terminal, future) && identical(_refreshes[key], coordinator)) {
+      if (identical(coordinator.terminal, future) && identical(_refreshes[key], coordinator)) {
         _refreshes.remove(key);
       }
     }
@@ -625,12 +730,9 @@ enum _RefreshIntent() { reuse, forced }
 final class _RefreshCoordinator({
     required var _RefreshIntent intent,
     required var int? generation,
-    required var Future<SessionOptionsOutcome> running,
-  }) {
-  Future<SessionOptionsOutcome>? reuseTail;
-  int? reuseTailGeneration;
-  Future<SessionOptionsOutcome>? forcedTail;
-}
+    required var int invalidationEpoch,
+    required var Future<SessionOptionsOutcome> terminal,
+  });
 
 sealed class const _CommitAttempt();
 

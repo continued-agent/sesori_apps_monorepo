@@ -63,6 +63,73 @@ void main() {
       expect(outcome, isA<SessionOptionsCacheUnavailable>());
     });
 
+    test("cache-only load does not expose a row read across stale-send invalidation", () async {
+      const key = SessionOptionsCacheKey.project(
+        pluginId: "plugin-1",
+        projectId: "project-1",
+        projectPath: "/projects/one",
+      );
+      final readStarted = Completer<void>();
+      final readGate = Completer<void>();
+      final repository = _FakeSessionOptionsRepository()
+        ..projectPaths["project-1"] = "/projects/one"
+        ..put(
+          _entry(
+            key: key,
+            response: _response(marker: "rejected"),
+            capturedAt: now,
+          ),
+        );
+      repository.readHandler = (_) async {
+        final captured = repository.stored(key);
+        readStarted.complete();
+        await readGate.future;
+        return captured;
+      };
+      final service = _service(repository: repository, now: now);
+
+      final load = service.loadCacheOnly(pluginId: "plugin-1", projectId: "project-1");
+      await readStarted.future;
+      await service.invalidateRejectedSelection(pluginId: "plugin-1", projectId: "project-1");
+      readGate.complete();
+
+      expect(await load, isA<SessionOptionsCacheUnavailable>());
+    });
+
+    test("cache-only load does not expose a row when invalidation starts during path validation", () async {
+      const key = SessionOptionsCacheKey.project(
+        pluginId: "plugin-1",
+        projectId: "project-1",
+        projectPath: "/projects/one",
+      );
+      final validationStarted = Completer<void>();
+      final validationGate = Completer<void>();
+      final repository = _FakeSessionOptionsRepository()
+        ..projectPaths["project-1"] = "/projects/one"
+        ..put(
+          _entry(
+            key: key,
+            response: _response(marker: "rejected"),
+            capturedAt: now,
+          ),
+        );
+      repository.resolveProjectPathHandler = (projectId) async {
+        if (repository.resolveProjectPathCalls == 2) {
+          validationStarted.complete();
+          await validationGate.future;
+        }
+        return repository.projectPaths[projectId];
+      };
+      final service = _service(repository: repository, now: now);
+
+      final load = service.loadCacheOnly(pluginId: "plugin-1", projectId: "project-1");
+      await validationStarted.future;
+      await service.invalidateRejectedSelection(pluginId: "plugin-1", projectId: "project-1");
+      validationGate.complete();
+
+      expect(await load, isA<SessionOptionsCacheUnavailable>());
+    });
+
     test("project absence is typed before cache access", () async {
       final repository = _FakeSessionOptionsRepository();
       final service = _service(repository: repository, now: now);
@@ -334,6 +401,48 @@ void main() {
   });
 
   group("SessionOptionsService dynamic loading", () {
+    test("a cache read crossing stale-send invalidation discovers fresh options", () async {
+      const key = SessionOptionsCacheKey.project(
+        pluginId: "plugin-1",
+        projectId: "project-1",
+        projectPath: "/projects/one",
+      );
+      final readStarted = Completer<void>();
+      final readGate = Completer<void>();
+      final repository = _FakeSessionOptionsRepository()
+        ..projectPaths["project-1"] = "/projects/one"
+        ..captureResult = _observed(
+          marker: "fresh",
+          completeness: PluginSessionOptionsCompleteness.complete,
+          generation: 7,
+        )
+        ..put(
+          _entry(
+            key: key,
+            response: _response(marker: "rejected"),
+            capturedAt: now,
+          ),
+        );
+      repository.readHandler = (_) async {
+        final captured = repository.stored(key);
+        readStarted.complete();
+        await readGate.future;
+        return captured;
+      };
+      final service = _service(repository: repository, now: now);
+
+      final load = service.loadDynamic(pluginId: "plugin-1", projectId: "project-1");
+      await readStarted.future;
+      await service.invalidateRejectedSelection(pluginId: "plugin-1", projectId: "project-1");
+      repository.readHandler = null;
+      readGate.complete();
+
+      final outcome = await load;
+      expect(outcome, isA<SessionOptionsAvailable>());
+      expect((outcome as SessionOptionsAvailable).response, _response(marker: "fresh"));
+      expect(repository.captureCalls, hasLength(1));
+    });
+
     test("valid cache returns immediately without plugin capture", () async {
       final repository = _FakeSessionOptionsRepository()
         ..projectPaths["project-1"] = "/projects/one"
@@ -437,6 +546,43 @@ void main() {
       );
     });
 
+    test("failed dynamic capture does not recover a row read across invalidation", () async {
+      const key = SessionOptionsCacheKey.project(
+        pluginId: "plugin-1",
+        projectId: "project-1",
+        projectPath: "/projects/one",
+      );
+      final recoveryReadStarted = Completer<void>();
+      final recoveryReadGate = Completer<void>();
+      final repository = _FakeSessionOptionsRepository()..projectPaths["project-1"] = "/projects/one";
+      repository.captureHandler = (_) async {
+        repository.put(
+          _entry(
+            key: key,
+            response: _response(marker: "rejected"),
+            capturedAt: now,
+          ),
+        );
+        return const SessionOptionsCaptureFailed();
+      };
+      repository.readHandler = (_) async {
+        final captured = repository.stored(key);
+        if (repository.readCalls == 4) {
+          recoveryReadStarted.complete();
+          await recoveryReadGate.future;
+        }
+        return captured;
+      };
+      final service = _service(repository: repository, now: now);
+
+      final load = service.loadDynamic(pluginId: "plugin-1", projectId: "project-1");
+      await recoveryReadStarted.future;
+      await service.invalidateRejectedSelection(pluginId: "plugin-1", projectId: "project-1");
+      recoveryReadGate.complete();
+
+      expect(await load, isA<SessionOptionsRefreshFailedUnavailable>());
+    });
+
     test("failed dynamic capture without a cache returns unavailable", () async {
       final repository = _FakeSessionOptionsRepository()
         ..projectPaths["project-1"] = "/projects/one"
@@ -495,6 +641,191 @@ void main() {
         await service.refreshExplicit(pluginId: "plugin-1", projectId: "project-1"),
         isA<SessionOptionsRefreshFailedUnavailable>(),
       );
+    });
+
+    test("stale-send invalidation deletes the rejected row before client discovery", () async {
+      const key = SessionOptionsCacheKey.project(
+        pluginId: "plugin-1",
+        projectId: "project-1",
+        projectPath: "/projects/one",
+      );
+      final repository = _FakeSessionOptionsRepository()
+        ..projectPaths["project-1"] = "/projects/one"
+        ..captureResult = const SessionOptionsCaptureFailed()
+        ..put(
+          _entry(
+            key: key,
+            response: _response(marker: "rejected"),
+            capturedAt: now,
+          ),
+        );
+      final service = _service(repository: repository, now: now);
+
+      await service.invalidateRejectedSelection(
+        pluginId: "plugin-1",
+        projectId: "project-1",
+      );
+
+      expect(repository.deletedKeys, [key]);
+      expect(repository.stored(key), isNull);
+      expect(repository.captureCalls, isEmpty);
+    });
+
+    test("stale-send invalidation fences a capture that finishes before its delete", () async {
+      const key = SessionOptionsCacheKey.project(
+        pluginId: "plugin-1",
+        projectId: "project-1",
+        projectPath: "/projects/one",
+      );
+      final capture = Completer<SessionOptionsCaptureResult>();
+      final deleteGate = Completer<void>();
+      final repository = _FakeSessionOptionsRepository()
+        ..projectPaths["project-1"] = "/projects/one"
+        ..deleteGate = deleteGate
+        ..put(
+          _entry(
+            key: key,
+            response: _response(marker: "rejected"),
+            capturedAt: now,
+          ),
+        );
+      repository.captureHandler = (_) => capture.future;
+      final service = _service(repository: repository, now: now);
+
+      final refresh = service.refreshExplicit(pluginId: "plugin-1", projectId: "project-1");
+      while (repository.captureCalls.isEmpty) {
+        await Future<void>.delayed(Duration.zero);
+      }
+      // The delete is issued against the discovery still running, not behind it.
+      final invalidation = service.invalidateRejectedSelection(pluginId: "plugin-1", projectId: "project-1");
+      await Future<void>.delayed(Duration.zero);
+      expect(repository.deletedKeys, [key]);
+      expect(repository.captureCalls, hasLength(1));
+
+      capture.complete(
+        _observed(
+          marker: "fresh",
+          completeness: PluginSessionOptionsCompleteness.complete,
+          generation: 7,
+        ),
+      );
+      // The pre-rejection discovery cannot commit even when it finishes before
+      // the overlapping delete settles.
+      await Future<void>.delayed(Duration.zero);
+      expect(repository.commitCalls, isEmpty);
+
+      deleteGate.complete();
+      await invalidation;
+      final outcome = await refresh;
+      expect(outcome, isA<SessionOptionsRefreshFailedUnavailable>());
+      expect(repository.commitCalls, isEmpty);
+      expect(repository.stored(key), isNull);
+    });
+
+    test("stale-send invalidation fences a capture that finishes after its delete", () async {
+      const key = SessionOptionsCacheKey.project(
+        pluginId: "plugin-1",
+        projectId: "project-1",
+        projectPath: "/projects/one",
+      );
+      final capture = Completer<SessionOptionsCaptureResult>();
+      final repository = _FakeSessionOptionsRepository()
+        ..projectPaths["project-1"] = "/projects/one"
+        ..put(
+          _entry(
+            key: key,
+            response: _response(marker: "rejected"),
+            capturedAt: now,
+          ),
+        );
+      repository.captureHandler = (_) => capture.future;
+      final service = _service(repository: repository, now: now);
+
+      final refresh = service.refreshExplicit(pluginId: "plugin-1", projectId: "project-1");
+      await _waitFor(condition: () => repository.captureCalls.length == 1);
+      await service.invalidateRejectedSelection(pluginId: "plugin-1", projectId: "project-1");
+      expect(repository.stored(key), isNull);
+
+      capture.complete(
+        _observed(
+          marker: "rejected",
+          completeness: PluginSessionOptionsCompleteness.complete,
+          generation: 7,
+        ),
+      );
+
+      expect(await refresh, isA<SessionOptionsRefreshFailedUnavailable>());
+      expect(repository.commitCalls, isEmpty);
+      expect(repository.stored(key), isNull);
+    });
+
+    test("stale-send invalidation removes a pre-rejection commit that lands after its delete", () async {
+      const key = SessionOptionsCacheKey.project(
+        pluginId: "plugin-1",
+        projectId: "project-1",
+        projectPath: "/projects/one",
+      );
+      final commitGate = Completer<void>();
+      final repository = _FakeSessionOptionsRepository()
+        ..projectPaths["project-1"] = "/projects/one"
+        ..captureResult = _observed(
+          marker: "rejected",
+          completeness: PluginSessionOptionsCompleteness.complete,
+          generation: 7,
+        );
+      repository.commitHandler = (call) async {
+        await commitGate.future;
+        return repository.applyCas(call);
+      };
+      final service = _service(repository: repository, now: now);
+
+      final refresh = service.refreshExplicit(pluginId: "plugin-1", projectId: "project-1");
+      await _waitFor(condition: () => repository.commitCalls.length == 1);
+      await service.invalidateRejectedSelection(pluginId: "plugin-1", projectId: "project-1");
+
+      commitGate.complete();
+      expect(await refresh, isA<SessionOptionsRefreshFailedUnavailable>());
+      expect(repository.conditionalDeleteCalls, hasLength(1));
+      expect(repository.stored(key), isNull);
+    });
+
+    test("capture failure waits for stale-send invalidation before checking retained cache", () async {
+      const key = SessionOptionsCacheKey.project(
+        pluginId: "plugin-1",
+        projectId: "project-1",
+        projectPath: "/projects/one",
+      );
+      final capture = Completer<SessionOptionsCaptureResult>();
+      final deleteGate = Completer<void>();
+      final repository = _FakeSessionOptionsRepository()
+        ..projectPaths["project-1"] = "/projects/one"
+        ..deleteGate = deleteGate
+        ..put(
+          _entry(
+            key: key,
+            response: _response(marker: "rejected"),
+            capturedAt: now,
+          ),
+        );
+      repository.captureHandler = (_) => capture.future;
+      final service = _service(repository: repository, now: now);
+
+      final refresh = service.refreshExplicit(pluginId: "plugin-1", projectId: "project-1");
+      await _waitFor(condition: () => repository.captureCalls.length == 1);
+      final invalidation = service.invalidateRejectedSelection(pluginId: "plugin-1", projectId: "project-1");
+      await _waitFor(condition: () => repository.deletedKeys.length == 1);
+      var refreshCompleted = false;
+      unawaited(refresh.then((_) => refreshCompleted = true));
+
+      capture.complete(const SessionOptionsCaptureFailed());
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+      expect(refreshCompleted, isFalse);
+
+      deleteGate.complete();
+      await invalidation;
+      expect(await refresh, isA<SessionOptionsRefreshFailedUnavailable>());
+      expect(repository.stored(key), isNull);
     });
 
     test("explicit thrown capture retains a privacy-safe typed cause", () async {
@@ -1121,6 +1452,45 @@ void main() {
       );
     });
 
+    test("forced refresh after invalidation does not reuse pre-rejection discovery", () async {
+      final preRejection = Completer<SessionOptionsCaptureResult>();
+      final postRejection = Completer<SessionOptionsCaptureResult>();
+      final repository = _FakeSessionOptionsRepository()..projectPaths["project-1"] = "/projects/one";
+      repository.captureHandler = (_) => switch (repository.captureCalls.length) {
+        1 => preRejection.future,
+        2 => postRejection.future,
+        _ => throw StateError("unexpected capture"),
+      };
+      final service = _service(repository: repository, now: now);
+
+      final staleRefresh = service.refreshExplicit(pluginId: "plugin-1", projectId: "project-1");
+      await _waitFor(condition: () => repository.captureCalls.length == 1);
+      await service.invalidateRejectedSelection(pluginId: "plugin-1", projectId: "project-1");
+      final recoveryRefresh = service.refreshExplicit(pluginId: "plugin-1", projectId: "project-1");
+
+      preRejection.complete(
+        _observed(
+          marker: "rejected",
+          completeness: PluginSessionOptionsCompleteness.complete,
+          generation: 7,
+        ),
+      );
+      expect(await staleRefresh, isA<SessionOptionsRefreshFailedUnavailable>());
+      await _waitFor(condition: () => repository.captureCalls.length == 2);
+
+      postRejection.complete(
+        _observed(
+          marker: "fresh",
+          completeness: PluginSessionOptionsCompleteness.complete,
+          generation: 7,
+        ),
+      );
+      final recoveryOutcome = await recoveryRefresh;
+      expect(recoveryOutcome, isA<SessionOptionsAvailable>());
+      expect((recoveryOutcome as SessionOptionsAvailable).response, _response(marker: "fresh"));
+      expect(repository.captureCalls, hasLength(2));
+    });
+
     test("a current-generation reuse queues behind stale-generation reuse", () async {
       final staleCapture = Completer<SessionOptionsCaptureResult>();
       final repository = _FakeSessionOptionsRepository()..projectPaths["project-1"] = "/projects/one";
@@ -1311,11 +1681,14 @@ class _FakeSessionOptionsRepository() implements SessionOptionsRepository {
   int runtimeChecks = 0;
   int bindingReads = 0;
   int readCalls = 0;
+  int resolveProjectPathCalls = 0;
   SessionOptionsCaptureResult captureResult = _observed(
     marker: "default",
     completeness: PluginSessionOptionsCompleteness.complete,
     generation: 7,
   );
+  Completer<void>? deleteGate;
+  Future<String?> Function(String projectId)? resolveProjectPathHandler;
   Future<SessionOptionsCacheEntry?> Function(SessionOptionsCacheKey key)? readHandler;
   Future<SessionOptionsCaptureResult> Function(_CaptureCall call)? captureHandler;
   Future<bool> Function(_CommitCall call)? commitHandler;
@@ -1338,7 +1711,11 @@ class _FakeSessionOptionsRepository() implements SessionOptionsRepository {
   }
 
   @override
-  Future<String?> resolveProjectPath({required String projectId}) async => projectPaths[projectId];
+  Future<String?> resolveProjectPath({required String projectId}) async {
+    resolveProjectPathCalls++;
+    final handler = resolveProjectPathHandler;
+    return await (handler == null ? projectPaths[projectId] : handler(projectId));
+  }
 
   @override
   Future<String?> resolveProjectIdForBackendSession({
@@ -1371,6 +1748,7 @@ class _FakeSessionOptionsRepository() implements SessionOptionsRepository {
   @override
   Future<void> delete({required SessionOptionsCacheKey key}) async {
     deletedKeys.add(key);
+    await deleteGate?.future;
     remove(key);
   }
 

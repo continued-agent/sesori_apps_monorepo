@@ -5,6 +5,7 @@ import "package:sesori_shared/sesori_shared.dart";
 
 import "../repositories/models/project_not_found_exception.dart";
 import "../services/archived_session_validator.dart";
+import "../services/stale_session_prompt_options_exception.dart";
 import "http_method.dart";
 import "routed_request.dart";
 
@@ -103,6 +104,11 @@ abstract class BodyRequestHandler<REQ, RES extends Object>(
       return buildErrorResponse(request, 404, "project not found");
     } on SessionArchivedReadOnlyException catch (err) {
       return buildArchivedRejectionResponse(request, err.rejection);
+    } on StaleSessionPromptOptionsException catch (err) {
+      // The client only learns the opaque code, so this is the sole place that
+      // retains which plugin operation rejected the selection and where.
+      Log.w("${request.method} ${request.path}: stale session options", err.cause, err.causeStackTrace);
+      return buildStaleOptionsRejectionResponse(request, err.message);
     } on PluginOperationException catch (err, stackTrace) {
       Log.w("${request.method} ${request.path}: upstream failure", err, stackTrace);
       return buildErrorResponse(request, err.statusCode ?? 502, err.toString());
@@ -238,6 +244,18 @@ abstract class const RequestHandlerBase(
     status: 409,
     headers: {"content-type": "application/json"},
     body: jsonEncode(rejection.toJson()),
+  );
+
+  /// Builds the 409 response telling the client its session options selection
+  /// (agent, model, or variant) is no longer offered and must be refreshed
+  /// before resending.
+  RelayResponse buildStaleOptionsRejectionResponse(RelayRequest request, String? message) => RelayResponse(
+    id: request.id,
+    status: 409,
+    headers: {"content-type": "application/json"},
+    body: jsonEncode(
+      SendPromptErrorResponse(code: SendPromptErrorCode.staleSessionOptions, message: message).toJson(),
+    ),
   );
 
   /// Builds an error response with the given [status] and plain-text [message].
