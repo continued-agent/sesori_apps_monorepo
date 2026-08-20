@@ -26,6 +26,8 @@ void main() {
         isTrue,
         reason: "Hermes advertises prompt image support",
       );
+      expect(HermesPluginDescriptor.minVersion, "0.20.0");
+      expect(HermesPluginDescriptor.targetVersion, "0.20.4");
     });
 
     test("declares only the binary option and no install capability", () {
@@ -45,7 +47,7 @@ void main() {
         processSequence: [
           _ProbeProcess(
             pid: 1,
-            stdoutBytes: utf8.encode("hermes-acp v0.20.0\n"),
+            stdoutBytes: utf8.encode("hermes-acp v0.20.4\n"),
             stderrBytes: const [],
             exitCode: Future<int>.value(0),
           ),
@@ -78,7 +80,7 @@ void main() {
         processSequence: [
           _ProbeProcess(
             pid: 1,
-            stdoutBytes: utf8.encode("0.20.1\n"),
+            stdoutBytes: utf8.encode("0.20.4\n"),
             stderrBytes: const [],
             exitCode: Future<int>.value(0),
           ),
@@ -114,7 +116,7 @@ void main() {
         processSequence: [
           _ProbeProcess(
             pid: 1,
-            stdoutBytes: utf8.encode("0.20.0\n"),
+            stdoutBytes: utf8.encode("0.20.4\n"),
             stderrBytes: const [],
             exitCode: Future<int>.value(0),
           ),
@@ -135,7 +137,7 @@ void main() {
         stateDirectory: stateDirectory,
       );
 
-      expect(result, const PluginSetupReady.versioned(runtimeVersion: "0.20.0"));
+      expect(result, const PluginSetupReady.versioned(runtimeVersion: "0.20.4"));
       expect(processes.spawnedExecutables, ["hermes", "hermes"]);
       expect(processes.spawnedArguments, [
         const ["acp", "--version"],
@@ -344,7 +346,7 @@ void main() {
         processSequence: [
           _ProbeProcess(
             pid: 1,
-            stdoutBytes: utf8.encode("0.20.0\n"),
+            stdoutBytes: utf8.encode("0.20.4\n"),
             stderrBytes: const [],
             exitCode: Future<int>.value(0),
           ),
@@ -366,7 +368,7 @@ void main() {
       );
 
       expect(result, isA<PluginSetupAuthenticationRequired>());
-      expect(result.runtimeVersion, "0.20.0");
+      expect(result.runtimeVersion, "0.20.4");
     });
 
     test("reports authentication required when a model has no provider", () async {
@@ -375,7 +377,7 @@ void main() {
         processSequence: [
           _ProbeProcess(
             pid: 1,
-            stdoutBytes: utf8.encode("0.20.0\n"),
+            stdoutBytes: utf8.encode("0.20.4\n"),
             stderrBytes: const [],
             exitCode: Future<int>.value(0),
           ),
@@ -397,7 +399,7 @@ void main() {
       );
 
       expect(result, isA<PluginSetupAuthenticationRequired>());
-      expect(result.runtimeVersion, "0.20.0");
+      expect(result.runtimeVersion, "0.20.4");
     });
 
     test("reports unknown when the status command exits nonzero", () async {
@@ -406,7 +408,7 @@ void main() {
         processSequence: [
           _ProbeProcess(
             pid: 1,
-            stdoutBytes: utf8.encode("0.20.0\n"),
+            stdoutBytes: utf8.encode("0.20.4\n"),
             stderrBytes: const [],
             exitCode: Future<int>.value(0),
           ),
@@ -428,7 +430,7 @@ void main() {
       );
 
       expect(result, isA<PluginSetupUnknown>());
-      expect(result.runtimeVersion, "0.20.0");
+      expect(result.runtimeVersion, "0.20.4");
     });
 
     test("uses an explicit --hermes-bin override for every probe", () async {
@@ -437,7 +439,7 @@ void main() {
         processSequence: [
           _ProbeProcess(
             pid: 1,
-            stdoutBytes: utf8.encode("0.20.0\n"),
+            stdoutBytes: utf8.encode("0.20.4\n"),
             stderrBytes: const [],
             exitCode: Future<int>.value(0),
           ),
@@ -458,7 +460,7 @@ void main() {
         stateDirectory: stateDirectory,
       );
 
-      expect(result, const PluginSetupReady.versioned(runtimeVersion: "0.20.0"));
+      expect(result, const PluginSetupReady.versioned(runtimeVersion: "0.20.4"));
       expect(processes.spawnedExecutables, ["/custom/hermes", "/custom/hermes"]);
     });
 
