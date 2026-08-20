@@ -28,6 +28,7 @@ import "../../utils/model_filter/default_model_selector.dart";
 import "deferred_part_event_buffer.dart";
 import "prompt_send_queue.dart";
 import "queued_session_submission.dart";
+import "session_detail_resolvers.dart";
 import "session_detail_state.dart";
 import "streaming_text_buffer.dart";
 
@@ -72,6 +73,10 @@ class SessionDetailCubit(
   static const _defaultModelSelector = DefaultModelSelector();
   ComposerDraft _composerDraft = _composerDraftRepository.readForSession(sessionId: _sessionId);
   final PromptSendQueue _promptQueue = PromptSendQueue();
+
+  /// Monotonic counter stamped on parked sends, so a snapshot can settle only
+  /// the parked prompts its fetch actually had a chance to observe.
+  int _parkEpoch = 0;
   final DeferredPartEventBuffer _deferredPartEvents = DeferredPartEventBuffer();
 
   late final StreamSubscription<SesoriSessionEvent> _eventSubscription;
@@ -149,6 +154,7 @@ class SessionDetailCubit(
     final deferredPartEventSequence = _deferredPartEvents.latestSequence;
     _activeLoadingRefreshes.update(connectionGeneration, (count) => count + 1, ifAbsent: () => 1);
     emit(const SessionDetailState.loading());
+    final parkEpochAtFetch = _parkEpoch;
     late final SessionDetailLoadResult result;
     try {
       result = isReload
@@ -182,7 +188,7 @@ class SessionDetailCubit(
           messageIds: snapshot.messages.map((message) => message.info.id),
           sequence: deferredPartEventSequence,
         );
-        emit(_buildLoadedState(snapshot: snapshot));
+        emit(_buildLoadedState(snapshot: snapshot, parkEpochAtFetch: parkEpochAtFetch));
         final effectiveProjectId = snapshot.projectId;
         if (effectiveProjectId == null || effectiveProjectId.isEmpty) {
           _projectViewingService.markClaimFailed(claim: _projectViewClaim);
@@ -465,10 +471,12 @@ class SessionDetailCubit(
       current.copyWith(
         isRefreshing: true,
         queuedMessages: _promptQueue.items,
+        awaitingBridgeSubmissions: _promptQueue.awaitingBridge,
         sendingSubmission: _promptQueue.active,
       ),
     );
 
+    final parkEpochAtFetch = _parkEpoch;
     try {
       final result = await _loadService.reload(sessionId: _sessionId, projectId: _projectId);
       if (isClosed) return _SessionRefreshResult.closed;
@@ -479,6 +487,7 @@ class SessionDetailCubit(
             latest.copyWith(
               isRefreshing: false,
               queuedMessages: _promptQueue.items,
+              awaitingBridgeSubmissions: _promptQueue.awaitingBridge,
               sendingSubmission: _promptQueue.active,
             ),
           );
@@ -532,7 +541,7 @@ class SessionDetailCubit(
             providers: availableProviders,
             model: preservedSelectedAgentModel,
           );
-          _reconcileStagedWithSnapshot(snapshot: snapshot);
+          _reconcileStagedWithSnapshot(snapshot: snapshot, parkEpochAtFetch: parkEpochAtFetch);
 
           final refreshedSessionStatus = snapshot.statuses[_sessionId] ?? const SessionStatus.idle();
           final retryMessage = switch (refreshedSessionStatus) {
@@ -580,6 +589,7 @@ class SessionDetailCubit(
                 stagedCommand: preservedStagedCommand,
               ),
               queuedMessages: _visibleStagedItems(bridgePrompts: snapshot.bridgeQueuedPrompts),
+              awaitingBridgeSubmissions: _visibleAwaitingBridge(bridgePrompts: snapshot.bridgeQueuedPrompts),
               sendingSubmission: _visibleStagedSending(bridgePrompts: snapshot.bridgeQueuedPrompts),
               isRefreshing: false,
               availableVariants: availableVariants,
@@ -604,6 +614,7 @@ class SessionDetailCubit(
               latest.copyWith(
                 isRefreshing: false,
                 queuedMessages: _promptQueue.items,
+                awaitingBridgeSubmissions: _promptQueue.awaitingBridge,
                 sendingSubmission: _promptQueue.active,
               ),
             );
@@ -617,6 +628,7 @@ class SessionDetailCubit(
               latest.copyWith(
                 isRefreshing: false,
                 queuedMessages: _promptQueue.items,
+                awaitingBridgeSubmissions: _promptQueue.awaitingBridge,
                 sendingSubmission: _promptQueue.active,
               ),
             );
@@ -632,6 +644,7 @@ class SessionDetailCubit(
           latest.copyWith(
             isRefreshing: false,
             queuedMessages: _promptQueue.items,
+            awaitingBridgeSubmissions: _promptQueue.awaitingBridge,
             sendingSubmission: _promptQueue.active,
           ),
         );
@@ -1135,31 +1148,45 @@ class SessionDetailCubit(
           assistantAgentModel: assistantAgentModel,
         ),
       );
-    } else if (message case MessageUser(promptId: final promptId?)) {
-      // The queued bubble transforms into this message: dropping the entry in
-      // the same emission as the message upsert means no frame ever shows
-      // both (or neither). Any stale local copy of the same prompt (a send
-      // whose response was lost) is healed here too.
-      _promptQueue.removeByPromptId(promptId);
-      final bridgePrompts = [
-        for (final prompt in current.bridgeQueuedPrompts)
-          if (prompt.id != promptId) prompt,
-      ];
-      emit(
-        current.copyWith(
-          messages: messages,
-          bridgeQueuedPrompts: bridgePrompts,
-          queuedMessages: _visibleStagedItems(bridgePrompts: bridgePrompts),
-          sendingSubmission: _visibleStagedSending(bridgePrompts: bridgePrompts),
-        ),
-      );
-      // The healed prompt's own send may have stopped the drain on a lost
-      // response; anything staged behind it must not stay parked.
-      _tryDrainQueue();
     } else {
       emit(current.copyWith(messages: messages));
     }
     _drainDeferredPartsForMessage(messageId: message.id);
+    // A user envelope usually arrives before its first text part; releasing
+    // the queued copies runs only once the message can actually render, so
+    // the row never blanks between the envelope and that part.
+    if (message is MessageUser) _releaseDeliveredPrompt(messageId: message.id);
+  }
+
+  /// Drops every queued copy of a delivered prompt — the bridge queue entry
+  /// and any locally staged/parked duplicate of a send whose response was
+  /// lost — once its user message is renderable. The transcript list keys
+  /// all of them to one row id, so the swap is seamless whichever emission
+  /// order the events arrive in.
+  void _releaseDeliveredPrompt({required String messageId}) {
+    if (isClosed) return;
+    final current = state;
+    if (current is! SessionDetailLoaded) return;
+    final message = current.messages.where((item) => item.info.id == messageId).firstOrNull;
+    if (message == null || !message.hasRenderableUserContent) return;
+    if (message.info case MessageUser(promptId: final promptId?)) {
+      final bridgePrompts = [
+        for (final prompt in current.bridgeQueuedPrompts)
+          if (prompt.id != promptId) prompt,
+      ];
+      _promptQueue.removeByPromptId(promptId);
+      emit(
+        current.copyWith(
+          bridgeQueuedPrompts: bridgePrompts,
+          queuedMessages: _visibleStagedItems(bridgePrompts: bridgePrompts),
+          awaitingBridgeSubmissions: _visibleAwaitingBridge(bridgePrompts: bridgePrompts),
+          sendingSubmission: _visibleStagedSending(bridgePrompts: bridgePrompts),
+        ),
+      );
+      // The delivered prompt's own send may have stopped the drain on a lost
+      // response; anything staged behind it must not stay parked.
+      _tryDrainQueue();
+    }
   }
 
   /// Applies a full-list replacement of the bridge-owned queue. Local staged
@@ -1176,6 +1203,7 @@ class SessionDetailCubit(
       current.copyWith(
         bridgeQueuedPrompts: prompts,
         queuedMessages: _visibleStagedItems(bridgePrompts: prompts),
+        awaitingBridgeSubmissions: _visibleAwaitingBridge(bridgePrompts: prompts),
         sendingSubmission: _visibleStagedSending(bridgePrompts: prompts),
       ),
     );
@@ -1202,6 +1230,7 @@ class SessionDetailCubit(
       current.copyWith(
         bridgeQueuedPrompts: bridgePrompts,
         queuedMessages: _visibleStagedItems(bridgePrompts: bridgePrompts),
+        awaitingBridgeSubmissions: _visibleAwaitingBridge(bridgePrompts: bridgePrompts),
         sendingSubmission: _visibleStagedSending(bridgePrompts: bridgePrompts),
       ),
     );
@@ -1288,6 +1317,8 @@ class SessionDetailCubit(
         streamingText: _streamingBuffer.snapshot(),
       ),
     );
+    // The part may be what makes a delivered user prompt renderable.
+    if (message.info is MessageUser) _releaseDeliveredPrompt(messageId: part.messageID);
   }
 
   void _onPartRemoved({required String messageId, required String partId}) {
@@ -1528,6 +1559,7 @@ class SessionDetailCubit(
     emit(
       current.copyWith(
         queuedMessages: _visibleStagedItems(bridgePrompts: current.bridgeQueuedPrompts),
+        awaitingBridgeSubmissions: _visibleAwaitingBridge(bridgePrompts: current.bridgeQueuedPrompts),
         sendingSubmission: _visibleStagedSending(bridgePrompts: current.bridgeQueuedPrompts),
       ),
     );
@@ -1535,15 +1567,28 @@ class SessionDetailCubit(
 
   /// Drops staged copies a fresh snapshot proves the bridge already owns —
   /// listed in its queue or landed as a user message with the same prompt id.
-  void _reconcileStagedWithSnapshot({required SessionDetailSnapshot snapshot}) {
+  void _reconcileStagedWithSnapshot({required SessionDetailSnapshot snapshot, required int parkEpochAtFetch}) {
+    final owned = <String>{};
     for (final prompt in snapshot.bridgeQueuedPrompts) {
+      owned.add(prompt.id);
       _promptQueue.removeByPromptId(prompt.id);
     }
     for (final message in snapshot.messages) {
       if (message.info case MessageUser(promptId: final promptId?)) {
+        // The snapshot holding the message at all proves the bridge owns the
+        // prompt, so it must never be settled as absent — but a bare envelope
+        // cannot render, and releasing the local copy on it would blank the
+        // row until its first part arrives (same gate as the live path).
+        owned.add(promptId);
+        if (!message.hasRenderableUserContent) continue;
         _promptQueue.removeByPromptId(promptId);
       }
     }
+    // A successful snapshot that holds neither the queue entry nor the
+    // message for a prompt parked before its fetch began proves the bridge
+    // no longer owns it — settle it instead of showing a ghost bubble
+    // forever. Prompts parked after the fetch began are untouched.
+    _promptQueue.settleAwaitingAbsent(ownedPromptIds: owned, parkedAtOrBeforeEpoch: parkEpochAtFetch);
   }
 
   /// Staged sends not yet owned by the bridge. A staged copy whose id the
@@ -1554,6 +1599,18 @@ class SessionDetailCubit(
     final bridgeIds = {for (final prompt in bridgePrompts) prompt.id};
     return [
       for (final item in _promptQueue.items)
+        if (!bridgeIds.contains(item.promptId)) item,
+    ];
+  }
+
+  /// Accepted-but-unlisted sends still owed a bridge representation. Hidden
+  /// once the bridge queue lists their prompt id.
+  List<QueuedSessionSubmission> _visibleAwaitingBridge({required List<QueuedSessionPrompt> bridgePrompts}) {
+    final awaiting = _promptQueue.awaitingBridge;
+    if (bridgePrompts.isEmpty || awaiting.isEmpty) return awaiting;
+    final bridgeIds = {for (final prompt in bridgePrompts) prompt.id};
+    return [
+      for (final item in awaiting)
         if (!bridgeIds.contains(item.promptId)) item,
     ];
   }
@@ -1604,7 +1661,10 @@ class SessionDetailCubit(
       switch (result) {
         case SuccessResponse():
           sendSucceeded = true;
-          _promptQueue.completeSend();
+          // Parked, not dropped: the bubble keeps rendering from the parked
+          // slot until the bridge's queue event or snapshot lists the prompt,
+          // so acceptance outrunning the event never blanks the row.
+          _promptQueue.parkAccepted(epoch: ++_parkEpoch);
           _reportAcceptedSubmission(submission: submission);
         case ErrorResponse():
           sendSettledElsewhere = !_promptQueue.failSend();
@@ -1978,7 +2038,7 @@ class SessionDetailCubit(
       final current = state;
       // Stop means "run nothing further": staged local sends must not fire on
       // the next drain. The bridge clears its own queue as part of the abort.
-      if (_promptQueue.isNotEmpty || _promptQueue.isSending) {
+      if (_promptQueue.isNotEmpty || _promptQueue.isSending || _promptQueue.awaitingBridge.isNotEmpty) {
         _promptQueue.clear();
         _emitQueueUpdate(current is SessionDetailLoaded ? current : null);
       }
@@ -2006,8 +2066,8 @@ class SessionDetailCubit(
     }
   }
 
-  SessionDetailLoaded _buildLoadedState({required SessionDetailSnapshot snapshot}) {
-    _reconcileStagedWithSnapshot(snapshot: snapshot);
+  SessionDetailLoaded _buildLoadedState({required SessionDetailSnapshot snapshot, required int parkEpochAtFetch}) {
+    _reconcileStagedWithSnapshot(snapshot: snapshot, parkEpochAtFetch: parkEpochAtFetch);
     final latestAssistant = _latestAssistantOrErrorMessage(snapshot.messages);
     final childSessions = [...snapshot.childSessions];
     _sortChildrenByUpdatedDesc(childSessions);
@@ -2112,6 +2172,7 @@ class SessionDetailCubit(
       isRootSession: snapshot.isRootSession,
       isArchived: snapshot.isArchived,
       queuedMessages: _visibleStagedItems(bridgePrompts: snapshot.bridgeQueuedPrompts),
+      awaitingBridgeSubmissions: _visibleAwaitingBridge(bridgePrompts: snapshot.bridgeQueuedPrompts),
       sendingSubmission: _visibleStagedSending(bridgePrompts: snapshot.bridgeQueuedPrompts),
       availableAgents: agents,
       availableProviders: providers,
