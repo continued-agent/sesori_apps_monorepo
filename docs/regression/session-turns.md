@@ -48,10 +48,18 @@ defaults and queued client sends coherent.
 - Pi keeps at most one lazy resident RPC process per active session and allows
   different sessions to run concurrently. Startup replays and hydrates message
   identity before live frames attach or a turn dispatches; same-session prompts
-  remain FIFO. Process exit settles current work before queued work reconnects.
+  remain FIFO. An accepted prompt remains bridge-queued through startup and
+  selection until Pi echoes its correlated user message, including an
+  attachment-only echo; it can be cancelled before dispatch, and its
+  undispatched prompt id remains immediately retryable while cancellation
+  settles. If a successful turn omits that echo, Pi maps the stored payload
+  through the same user-message path before clearing the queue. Process exit
+  settles current work before queued work reconnects.
 - Pi slash commands are accepted by their correlated response or a matching
-  extension dialog. Commands reject while that session is busy, and a successful
-  command with no agent run crosses `get_state` before returning the lane idle.
+  extension dialog and remain in the request's sending state until then rather
+  than exposing a cancellable bridge-queue entry. Commands reject while that
+  session is busy, and a successful command with no agent run crosses `get_state`
+  before returning the lane idle.
   Abort rejects queued work and replaces the process so hidden steering or
   follow-up input cannot leak into the next turn.
 - Pi accepts only bounded, valid inline GIF, JPEG, PNG, and WebP data. Paths,
@@ -72,6 +80,13 @@ defaults and queued client sends coherent.
   session cancellation. Version 1 uses the model/mode configured in Hermes and
   offers no per-turn picker; Sesori does not call form-elicitation or unadvertised
   session-close methods to complete an ordinary turn.
+- Existing-session ACP prompts remain bridge-queued while an earlier turn,
+  process-wide lane, resume, or selection blocks their `session/prompt` frame.
+  Their synthetic user transcript message is published only after that frame
+  flushes successfully to the agent's stdin. OMP preserves its active-prompt
+  replacement semantics by cancelling the active turn immediately, then
+  dispatching the newly queued input after cancellation settles; Cursor and
+  Hermes retain ordinary FIFO turn boundaries.
 - Normalized user-message events feed the durable user-side activity marker used
   to order running roots. Known event times are applied monotonically. Backend
   input represented as a user message, including automatic compaction or other
@@ -93,10 +108,11 @@ defaults and queued client sends coherent.
   leaving the screen, locking the phone, and reconnecting, and is visible to
   every client of that bridge. A normal Claude prompt usually dispatches as
   steering immediately and remains represented only until its replayed user
-  message lands. Entries still waiting for process startup, an earlier command,
-  or a selection boundary can be cancelled individually; cancellation after
-  dispatch is refused as benign because the prompt is then governed by Stop.
-  Aborting the session clears every remaining entry and Claude's internal queue.
+  message lands; Pi similarly remains represented until its correlated echo.
+  Entries still waiting for process startup, an earlier turn or command, or a
+  selection boundary can be cancelled individually; cancellation after dispatch
+  is refused as benign because the prompt is then governed by Stop. Aborting the
+  session clears every remaining plugin-owned entry.
 - One prompt renders as one bubble that transforms in place: sending (staged
   locally while the POST is in flight) → queued (bridge-owned) → sent (the
   transcript message). The dispatched message carries the prompt id and
@@ -183,9 +199,9 @@ has started.
 - Session-detail refresh behavior is under active investigation, so refresh
   churn is recorded as evidence rather than judged pass or fail.
 - The bridge's queued prompts live in plugin memory and do not survive a
-  bridge restart (the backend process dies with the bridge). Claude is the
-  queue-owning plugin; harnesses whose backends take prompts immediately
-  (OpenCode, ACP-family, Codex) never surface queued entries.
+  bridge restart (the backend process dies with the bridge). Claude, Pi, and
+  the ACP family surface adapter-owned entries; OpenCode and Codex hand prompts
+  to their backends immediately and therefore do not.
 - A send staged locally (POST not yet accepted) is dropped if the session
   screen is left inside that sub-second window; while disconnected, staged
   sends survive only as long as the session-detail cubit is alive.
