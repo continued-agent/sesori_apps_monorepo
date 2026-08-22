@@ -23,7 +23,10 @@ class FirebaseAnalyticsClient({
     );
     if (event case ProductScreenViewedEvent(:final screen)) {
       try {
-        await _analytics.logScreenView(screenName: screen.wireValue, screenClass: "GoRouter");
+        // Vendor reports key screens by class by default, and a Flutter app
+        // has no native screen class to report — carry the pinned screen
+        // identity in both dimensions so neither reads as a constant.
+        await _analytics.logScreenView(screenName: screen.wireValue, screenClass: screen.wireValue);
       } on Object catch (error, stackTrace) {
         logw("Failed to mirror product analytics screen view", error, stackTrace);
       }
