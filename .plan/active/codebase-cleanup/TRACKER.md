@@ -5,12 +5,14 @@
 - **Plan slug:** `codebase-cleanup`
 - **Implementation base:** `origin/main` at `084b30276`
 - **Current branch:** `codebase-cleanup-plan`
-- **Series state:** Step 1/45 merged in
-  [#1018](https://github.com/sesori-ai/sesori_apps_monorepo/pull/1018);
-  Step 2/45 in PR
-- **Current step:** 2/45 — delete the dead concurrency copy
-- **Next action:** monitor Step 2; start Step 3 locally (shared dead helpers,
-  models, and the `rxdart` dependency) per the one-step-ahead workflow
+- **Series state:** Steps 1–2/45 merged (#1018, #1019); Step 3/45 in PR.
+  The owner asked for independent steps to run in parallel, up to about five
+  open PRs, so steps that touch disjoint trees are raised concurrently instead
+  of strictly one-step-ahead. Steps that share a package stay serialized:
+  4 after 3 (both `sesori_shared`), and 7's flatten after 5 (both `bridge/app`).
+- **Current step:** 3/45 — shared dead helpers, models, and `rxdart`
+- **Next action:** monitor Step 3; raise Steps 5 (bridge/app dead code) and 6
+  (tooling, dependencies, docs) in parallel — neither shares a tree with 3
 - **Overlapping work:** open PRs #918 (voice streaming), #956 (composer
   drag-and-drop), #939 (macOS list scrolling) overlap Steps 39–41 — rebase and
   re-scope after they merge; active plan `session-refresh-reconnects` owns
@@ -73,8 +75,8 @@
 | Done | Step | Exact PR title | State |
 |---|---|---|---|
 | [x] | 1/45 | `🌱 [codebase-cleanup] docs: raise the reliability cleanup plan [step 1/45]` | Merged in #1018 |
-| [ ] | 2/45 | `🌿 [codebase-cleanup] client(module_core): delete the dead concurrency copy [step 2/45]` | In PR |
-| [ ] | 3/45 | `🌿 [codebase-cleanup] shared: delete dead helpers, models, and the rxdart dependency [step 3/45]` | Not started |
+| [x] | 2/45 | `🌿 [codebase-cleanup] client(module_core): delete the dead concurrency copy [step 2/45]` | Merged in #1019 |
+| [ ] | 3/45 | `🌿 [codebase-cleanup] shared: delete dead helpers, models, and the rxdart dependency [step 3/45]` | In PR |
 | [ ] | 4/45 | `🌿 [codebase-cleanup] shared: tighten management fields and correct compatibility markers [step 4/45]` | Not started |
 | [ ] | 5/45 | `🌿 [codebase-cleanup] bridge(app): delete dead production code [step 5/45]` | Not started |
 | [ ] | 6/45 | `🌿 [codebase-cleanup] tooling: close CI gaps, prune dependencies, and refresh docs [step 6/45]` | Not started |
@@ -138,6 +140,16 @@
 
 Each step records here what it found stale relative to the plan before editing.
 
+- **Step 3 (2026-08-22):** member-by-member usage re-check changed the kept
+  set. The plan listed `partition` as possibly dead after Step 2; it is alive —
+  shared's own `multi_task_isolate_pool.dart` uses it, and also uses
+  `reduceSafe`, which the plan had not listed as kept. Both stay, with
+  `toUnmodifiableList` (used by `partition`). Everything else in the three
+  files was confirmed to have zero consumers: the `.verify(`, `.seeded(`,
+  `.not()`, `unawaited`, and `asyncMap` hits are `ChecksumValidator.verify`,
+  `BehaviorSubject.seeded`, Drift's `Expression.not`, `dart:async`'s
+  `unawaited`, and native `Stream.asyncMap` — not these extensions. The four
+  dead models were confirmed dead (own file, own test, README only).
 - **Step 2 (2026-08-22):** plan evidence held exactly. `dto_parser.dart` still
   had zero references in `client/`; the concurrency tree's only importer was
   `dto_parser.dart`; `MessageQueue`/`ConcurrentCache` had no production
@@ -210,11 +222,19 @@ Each step records here what it found stale relative to the plan before editing.
   1,172 passed in `client/module_core`; `flutter analyze` clean and
   `flutter test test/core` 217 passed in `client/app`.
 - Step 2 size against merge-base, self-inclusive of this record:
-  `+0 / -1,356` (13 files deleted, 2 doc files edited), under the 1,200–1,400
+  `+0 / -1,356` (15 files deleted, 2 doc files edited), under the 1,200–1,400
   target because the deletion is pure and no replacement code was needed.
 - Step 2 architecture implementation review: not run — deletion-only step with
   no new or moved production class, DI change, or contract change, per the
   review scope recorded in `PLAN.md`.
+- Step 3 verification: `dart analyze --fatal-infos` clean in all 12 bridge
+  packages and all 7 client modules (the real safety net for removing public
+  shared API); `dart test` — `shared/sesori_shared` 359 passed, `bridge/app`
+  2,693 passed, `sesori_plugin_opencode` 434 passed (the `wait2` consumer),
+  `client/module_core` 1,172 passed (the `chunked`/`normalize` consumer).
+- Step 3 architecture implementation review: not run — removal of unused
+  members and dead models with no new or moved class, no DI change, and no
+  change to any live contract.
 
 ## Plan Review
 
