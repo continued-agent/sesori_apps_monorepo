@@ -14,6 +14,7 @@ import "package:sesori_dart_core/src/cubits/project_list/project_list_state.dart
 import "package:sesori_dart_core/src/foundation/models/product_analytics/product_analytics_event.dart";
 import "package:sesori_dart_core/src/foundation/models/product_analytics/product_analytics_preference.dart";
 import "package:sesori_dart_core/src/repositories/models/analytics_delivery_result.dart";
+import "package:sesori_dart_core/src/services/loaded_state_analytics_reporter.dart";
 import "package:sesori_dart_core/src/services/models/product_analytics_state.dart";
 import "package:sesori_dart_core/src/services/models/session_activity_info.dart";
 import "package:sesori_dart_core/src/services/product_analytics_service.dart";
@@ -133,6 +134,9 @@ void main() {
       sessionUnseenTracker: fakeSessionUnseenTracker,
       registeredBridgesService: mockRegisteredBridgesService,
       productAnalyticsService: mockProductAnalyticsService,
+      loadedStateAnalyticsReporter: LoadedStateAnalyticsReporter.projectInventory(
+        productAnalyticsService: mockProductAnalyticsService,
+      ),
       failureReporter: mockFailureReporter,
     );
 
@@ -333,6 +337,46 @@ void main() {
           occurredAtUtc: any(named: "occurredAtUtc"),
         ),
       ).called(2);
+    });
+
+    test("an empty inventory does not retry after the cubit leaves loaded state", () async {
+      when(
+        () => mockProductAnalyticsService.logEvent(
+          event: any(named: "event"),
+          occurredAtUtc: any(named: "occurredAtUtc"),
+        ),
+      ).thenAnswer((_) async => AnalyticsDeliveryResult.failed);
+      var requestCount = 0;
+      when(() => mockProjectRepository.listProjects()).thenAnswer(
+        (_) async => ++requestCount == 1
+            ? ApiResponse.success(const Projects(data: <ProjectSummary>[]))
+            : ApiResponse.error(ApiError.generic()),
+      );
+      final cubit = buildCubit();
+      addTearDown(cubit.close);
+      await Future<void>.delayed(Duration.zero);
+
+      await cubit.loadProjects();
+      expect(cubit.state, isA<ProjectListFailed>());
+      analyticsStateController.add(
+        const ProductAnalyticsState(
+          preference: ProductAnalyticsPreferenceKnown(
+            preference: ProductAnalyticsPreference.enabled,
+          ),
+          synchronization: ProductAnalyticsSynchronized(),
+          availability: ProductAnalyticsActive(),
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      verify(
+        () => mockProductAnalyticsService.logEvent(
+          event: const ProductAnalyticsEvent.projectInventoryLoaded(
+            inventoryState: AnalyticsInventoryState.empty,
+          ),
+          occurredAtUtc: any(named: "occurredAtUtc"),
+        ),
+      ).called(1);
     });
 
     // -------------------------------------------------------------------------
