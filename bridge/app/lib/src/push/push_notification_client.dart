@@ -31,9 +31,8 @@ class PushNotificationClient({
   }
 
   Future<http.Response> _sendPost(SendNotificationPayload payload, String token) {
-    final base = authBackendURL.endsWith("/") ? authBackendURL.substring(0, authBackendURL.length - 1) : authBackendURL;
     return _client.post(
-      Uri.parse("$base/notifications/send"),
+      Uri.parse("$authBackendURL/notifications/send"),
       headers: {
         "Content-Type": "application/json",
         "Authorization": "Bearer $token",
