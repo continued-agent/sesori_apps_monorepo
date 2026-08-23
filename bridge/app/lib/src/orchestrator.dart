@@ -57,6 +57,7 @@ import "repositories/filesystem_repository.dart";
 import "repositories/health_repository.dart";
 import "repositories/mappers/git_diff_output_mapper.dart";
 import "repositories/mappers/session_event_mapper.dart";
+import "repositories/pending_interaction_support.dart";
 import "repositories/permission_repository.dart";
 import "repositories/pr_source_repository.dart";
 import "repositories/project_activity_repository.dart";
@@ -215,10 +216,6 @@ class Orchestrator({
     final gitCliApi = GitCliApi(processRunner: _processRunner, gitPathExists: _gitPathExists);
     final sessionRepository = SessionRepository(
       runtime: _pluginRuntime,
-      bridgeDerivedProjectPluginIds: {
-        for (final entry in pluginComposition.projectOwnershipById.entries)
-          if (entry.value == PluginProjectOwnership.bridgeDerived) entry.key,
-      },
       sessionDao: _database.sessionDao,
       projectsDao: _database.projectsDao,
       pullRequestDao: _database.pullRequestDao,
@@ -347,9 +344,10 @@ class Orchestrator({
       ),
       now: () => DateTime.now().millisecondsSinceEpoch,
     );
+    final pendingInteractionSupport = PendingInteractionSupport(sessionDao: _database.sessionDao);
     final permissionRepository = PermissionRepository(
       runtime: _pluginRuntime,
-      sessionDao: _database.sessionDao,
+      pendingSupport: pendingInteractionSupport,
     );
     final healthRepository = HealthRepository(
       bridgeVersion: appVersion,
@@ -366,6 +364,7 @@ class Orchestrator({
     );
     final questionRepository = QuestionRepository(
       runtime: _pluginRuntime,
+      pendingSupport: pendingInteractionSupport,
       sessionDao: _database.sessionDao,
       projectsDao: _database.projectsDao,
       aggregateSourceDeadline: aggregateSourceDeadline,

@@ -15,6 +15,7 @@ import "../api/database/tables/session_table.dart";
 import "../runtime/plugin_runtime.dart";
 import "models/catalog_import_control.dart";
 import "project_catalog_identity_calculator.dart";
+import "random_hex_id.dart";
 
 /// Backend-owned activity for one session, as reported by the backend itself.
 ///
@@ -563,11 +564,11 @@ class CatalogImportRepository({
 
   String _allocateSessionId({required Set<String> reservedIds}) {
     while (true) {
-      final buffer = StringBuffer("ses_");
-      for (var index = 0; index < 16; index++) {
-        buffer.write(_secureRandom.nextInt(256).toRadixString(16).padLeft(2, "0"));
-      }
-      final candidate = buffer.toString();
+      final candidate = generateRandomHexId(
+        secureRandom: _secureRandom,
+        prefix: "ses_",
+        byteLength: 16,
+      );
       if (reservedIds.add(candidate)) return candidate;
     }
   }
