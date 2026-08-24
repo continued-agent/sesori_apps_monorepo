@@ -11,7 +11,6 @@ import 'package:sesori_bridge/src/api/default_editor_api.dart';
 import 'package:sesori_bridge/src/api/wake_lock_client.dart';
 import 'package:sesori_bridge/src/auth/auth_api.dart';
 import 'package:sesori_bridge/src/auth/auth_repository.dart';
-import 'package:sesori_bridge/src/auth/bridge_id_migration_service.dart';
 import 'package:sesori_bridge/src/auth/bridge_id_storage.dart';
 import 'package:sesori_bridge/src/auth/bridge_registration_repository.dart';
 import 'package:sesori_bridge/src/auth/bridge_registration_service.dart';
@@ -140,16 +139,13 @@ class RunCommand() extends cli.Command<void> {
 
     final BridgeCliOptions options;
     final Map<String, PluginConfig> pluginConfigs;
-    final pluginConfigDeprecations = <String>[];
     try {
       // Plugin option validate hooks and config validation run at
       // argument-parse time — strictly before the startup mutex, so a typo'd
       // flag can never terminate a healthy resident bridge.
       pluginConfigs = <String, PluginConfig>{};
       for (final plugin in knownPlugins) {
-        final parsed = _pluginCliMappers[plugin.id]!.parse(results: results, options: plugin.options);
-        pluginConfigs[plugin.id] = parsed.config;
-        pluginConfigDeprecations.addAll(parsed.deprecations);
+        pluginConfigs[plugin.id] = _pluginCliMappers[plugin.id]!.parse(results: results, options: plugin.options);
       }
       for (final plugin in knownPlugins) {
         plugin.validateConfig(pluginConfigs[plugin.id]!);
@@ -182,11 +178,6 @@ class RunCommand() extends cli.Command<void> {
       ).format(version: appVersion);
       if (banner != null) Console.message(banner);
     }
-
-    // Surface deprecated-flag usage to the user directly. The legacy flag still
-    // worked; this only nudges the user toward the namespaced form, so it must
-    // be visible regardless of --log-level and is not a diagnostic.
-    pluginConfigDeprecations.forEach(Console.warning);
 
     final settingsRepository = BridgeSettingsRepository(api: BridgeSettingsApi());
     final sleepPreventionService = SleepPreventionService(
@@ -285,7 +276,6 @@ class LogoutCommand() extends cli.Command<void> {
       api: TerminalPromptApi(
         stdin: stdin,
         stdout: stdout,
-        environment: Platform.environment,
       ),
     );
     final logoutRunner = BridgeLogoutRunner(
@@ -346,13 +336,6 @@ Future<void> _unregisterBridgeRegistration({
     filePath: bridgeIdPath(dataDirectory: dataDirectory),
     writeRestrictedFile: writeRestrictedFile,
   );
-  // Adopt a legacy id persisted inside token.json first, so a never-reconnected
-  // legacy install still unregisters cleanly; the service reads the bridge id
-  // back out of storage.
-  await BridgeIdMigrationService(
-    bridgeIdStorage: bridgeIdStorage,
-    readLegacyBridgeId: () => readLegacyBridgeId(dataDirectory: dataDirectory),
-  ).migrate();
   if (await bridgeIdStorage.read() == null) {
     // Nothing registered to remove.
     return;
