@@ -2,14 +2,14 @@
 
 ## Status And Sources
 
-- **State:** researched from official source, published package metadata, and
-  current Sesori ACP/runtime code; implementation has not started.
+- **State:** runtime protocol implemented and merged through Step 6, including
+  the protocol-v1 invariant corrections in runtime PRs #6-8.
 - **Observed:** 2026-08-22.
 - **DeepSeek baseline:** `0.1.1-rc.2`, tag `dsh-v0.1.1-rc.2`, commit
   `b150a551b8d465e31e418e1b2eaf5e79bbb7d28e`.
 - **ACP SDK baseline:** `@agentclientprotocol/sdk@0.25.1`, protocol version 1.
 - **Repository:** <https://github.com/deepseek-ai/deepseek-harness>.
-- **Runtime repository:** planned `sesori-ai/sesori-deepseek-acp`.
+- **Runtime repository:** `sesori-ai/sesori-deepseek-acp`.
 - **Primary upstream source:**
   `packages/acp/acp/src/index.ts`, `packages/examples/acp-demo/`,
   `packages/bundle/base/cordis.patch.yml`, `packages/core/session/`,
@@ -23,11 +23,13 @@
 This document explains the intended adapter contract. The sole
 machine-verifiable source is the runtime repository's planned
 `protocol/v1/deepseek-acp.schema.json` plus its synthetic conformance corpus.
-Step 2 creates that source and validates runtime handlers/types against it;
-Step 7 vendors the exact schema/corpus commit and digests and validates generated
-Dart DTOs against every fixture. If implementation discovers an upstream
-mismatch, change the runtime schema/corpus first, then update this explanation
-and the vendored Dart consumer in the release order recorded in `PLAN.md`.
+Step 2 creates that source and validates runtime handlers/types against it.
+Step 7 vendors the exact schema/corpus commit and digests into a test-only
+package workspace and Makefile inventory, then tests schema/corpus/source-manifest
+integrity. Step 8 validates generated Dart DTOs against every fixture. If
+implementation discovers an upstream mismatch, change the runtime schema/corpus
+first, then update this explanation and the vendored Dart consumer in the release
+order recorded in `PLAN.md`.
 
 ## 1. Why A Custom Adapter Exists
 
@@ -58,7 +60,7 @@ Initial research pins:
 ```text
 @deepseek-ai/dsh-base                 0.1.1-rc.2
 @agentclientprotocol/sdk              0.25.1
-Node                                  one exact 24.x patch selected in Step 11
+Node                                  one exact 24.x patch selected in Step 12
 ```
 
 Every direct and transitive DeepSeek package is locked to the same upstream
@@ -294,6 +296,13 @@ Sesori and DeepSeek must persist one user identity:
    update `messageId`. Existing Dart live/replay mapping then produces the same
    plugin message and part ids.
 
+Assistant token chunks arrive before the pinned DeepSeek loop creates its random
+durable assistant message id. To keep token-live streaming without a correlation
+sidecar, the adapter derives the ACP assistant `messageId` deterministically from
+the session's durable turn/step identity. Every live chunk and the assembled
+assistant replay event use that same projection id. DeepSeek's own random
+message id remains unchanged in its log and model-facing state.
+
 An absent metadata id is valid for non-Sesori ACP clients and makes the adapter
 mint its normal DeepSeek id. Invalid metadata fails prompt admission before any
 attachment or session event is committed. Existing Sesori ACP plugins do not
@@ -461,10 +470,11 @@ The runtime repository owns deterministic protocol fixtures for:
 - telemetry/state/config isolation and stdout/content-log privacy; and
 - archive relocation/launch on all six target artifacts.
 
-The Dart package vendors the runtime repository's synthetic wire corpus and
-schema, with a manifest recording the source commit and SHA-256 values; it does
-not copy DeepSeek private session files. Runtime and Dart protocol-changing PRs
-must update and run that corpus in source/consumer order. Step 11 reruns
-cross-repository conformance without changing protocol v1 before publishing the
-adapter release; Step 15 repeats the complete product boundary with the exact
-managed artifacts pinned by the bridge.
+Step 7 vendors the runtime repository's synthetic wire corpus and schema in a
+test-only package workspace and Makefile inventory, with a manifest recording
+the source commit and SHA-256 values; it does not copy DeepSeek private session
+files or add production DTOs, APIs, or ACP hooks. Step 8 adds consumer DTO tests.
+Runtime and Dart protocol-changing PRs must update and run that corpus in
+source/consumer order. Step 12 reruns cross-repository conformance without
+changing protocol v1 before publishing the adapter release; Step 16 repeats the
+complete product boundary with the exact managed artifacts pinned by the bridge.
