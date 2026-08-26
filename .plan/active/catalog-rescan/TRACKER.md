@@ -5,9 +5,9 @@
 - **Plan slug:** `catalog-rescan`
 - **Implementation base:** `main` at
   `7b1ebe9bc629d05b5d104e76cd5dbaa1514d65a2`
-- **Series state:** Steps 1/8 to 6d/8 merged; Step 6e/8 open
-- **Current step:** report a Settings-started scan's outcome
-- **Next action:** land 6e, then reconcile projects-and-sessions.md in step 7
+- **Series state:** Steps 1/8 to 6e/8 merged; Step 6f/8 open
+- **Current step:** release the pull and stop it reporting twice
+- **Next action:** land 6f, then reconcile projects-and-sessions.md in step 7
 - **Origin issue:** [#961](https://github.com/sesori-ai/sesori_apps_monorepo/issues/961)
 - **External overlap:** [#1008](https://github.com/sesori-ai/sesori_apps_monorepo/issues/1008)
   owns Codex live updates; do not address it here
@@ -56,6 +56,7 @@
 |---|---|---|
 | Refresh model | Two-stage pull: soft unchanged, deep fires past `1.8 x triggerDistance` | A rescan boots every enabled harness backend, so it must be deliberate. Raised from 1.6 in 6d: too easy to reach by accident |
 | Deep-pull commit | On crossing the threshold, not on release | `CupertinoSliverRefreshControl` fires `onRefresh` on crossing and never on release, so release semantics were unbuildable. Owner decision 2026-08-24 |
+| Ordinary refresh dispatch | On release, and never at all for a pull that fired the second stage | Owner decision 2026-08-25. Dispatching at the trigger raced the pull: the read could land before the user committed, so nothing downstream could tell a plain refresh from the opening half of a scan. Four separate findings traced to that one race |
 | Gesture owner | One `module_prego` `PregoSliverRefreshControl` | Three hosts, only two of which use `PregoGlassScaffold`; the pane must not re-implement thresholds in `client/app` |
 | Row weight | Tinted card, distinct from the surrounding tiles | Reads as status rather than content, so it is never mistaken for an openable row |
 | Row component | Bespoke tinted card, not `PregoInlineAlertsNotifications` | 6b reused the inline alert to avoid building one; it paints `colors.fgPrimary`, so the row was a near-black slab over a light list. An alert interrupts, this reports |
@@ -712,4 +713,40 @@ duplicate-emission nicety.
   doing separately
 - **Step 6e PR:** [#1118](https://github.com/sesori-ai/sesori_apps_monorepo/pull/1118)
   open
+- **Step 6f origin:** two owner reports from a running build, one root cause.
+  The pull's own read reaches the same bridge the scan just put to work, so it
+  resolves only when the scan does. That held the list open (below), and it also
+  defeated 6d's toast suppression: the guard asked whether a scan was *live* at
+  toast time, and by then the row already read "Scan complete", so every deep
+  pull confirmed itself on top of the row reporting the same run. The guard now
+  asks whether the row is showing anything at all. Failures are still never
+  suppressed
+- **Step 6f root fix:** the owner chose to stop dispatching the ordinary
+  refresh at the trigger and run it on release instead, where the gesture has
+  already chosen its stage — and to skip it entirely for a pull that fired the
+  second stage, since the scan reaches the same backend and settles into a list
+  refresh of its own. That deleted the whole class at once: the race, the held
+  pull, the double report, and the orphaned future that the earlier release
+  mechanism created. The scan-start counter, both host guards and the
+  `FlutterError.reportError` handler all came out with it
+- **Step 6f residue:** a deep pull that finds no harness to scan now leaves the
+  list unrefreshed, because it runs no ordinary refresh and the scan never
+  opens. The row says what happened, and a shallow pull refreshes
+- **Step 6f superseded:** three rounds of findings landed on the same seam — the
+  toast guard reading presentation state at completion rather than identifying
+  the gesture. The row-based guard failed in both directions: it missed a deep
+  pull whose read outlived the row's own four-second clear, and it suppressed an
+  ordinary pull taken while an unrelated scan was still reported. Both cubits
+  now count the scans they start, and a pull compares that count either side of
+  its own refresh. Both cases have tests, each confirmed to fail against the
+  row-based guard
+- **Step 6f copy:** "Keep pulling to scan all harnesses" named the mechanism
+  rather than the outcome. Now "Keep pulling to find new sessions"
+- **Step 6f held pull:** after release the list stayed pushed down until the
+  scan finished. 6d made the held area empty
+  but left the extent: `CupertinoSliverRefreshControl` holds the pull open for
+  exactly as long as `onRefresh` runs, and that refresh reaches the same bridge
+  the scan just put to work, so it resolved only when the scan did. The control
+  now stops waiting the moment the second stage fires; the refresh still runs.
+  Test confirmed the list was held 60px down without the fix and 0 with it
 - **Final disposition:** pending
