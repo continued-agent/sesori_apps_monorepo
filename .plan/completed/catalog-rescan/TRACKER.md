@@ -5,9 +5,9 @@
 - **Plan slug:** `catalog-rescan`
 - **Implementation base:** `main` at
   `7b1ebe9bc629d05b5d104e76cd5dbaa1514d65a2`
-- **Series state:** Steps 1/8 to 6f/8 merged; Step 7/8 open
-- **Current step:** reconcile the regression docs
-- **Next action:** land 7, then run the recorded matrix and retire the plan in step 8
+- **Series state:** Complete. Steps 1/8 to 7/8 merged; step 8/8 is this retirement
+- **Current step:** retired
+- **Next action:** none; the plan is retired
 - **Origin issue:** [#961](https://github.com/sesori-ai/sesori_apps_monorepo/issues/961)
 - **External overlap:** [#1008](https://github.com/sesori-ai/sesori_apps_monorepo/issues/1008)
   owns Codex live updates; do not address it here
@@ -144,8 +144,9 @@
 | [x] | 6d/8 | `⚙️ [catalog-rescan] Quieten the scan row and its pull [step 6d/8]` | 400-700 | [PR #1114](https://github.com/sesori-ai/sesori_apps_monorepo/pull/1114) merged |
 | [x] | 6e/8 | `🌿 [catalog-rescan] Report a Settings scan's outcome [step 6e/8]` | 350-600 | [PR #1118](https://github.com/sesori-ai/sesori_apps_monorepo/pull/1118) merged |
 | [x] | 6f/8 | `🌿 [catalog-rescan] Run the ordinary refresh on release [step 6f/8]` | 250-450 | [PR #1119](https://github.com/sesori-ai/sesori_apps_monorepo/pull/1119) merged |
-| [ ] | 7/8 | `🌱 [catalog-rescan] Reconcile catalog rescan regression docs [step 7/8]` | 80-160 | Open |
-| [ ] | 8/8 | `🌱 [catalog-rescan] Verify and retire the catalog rescan plan [step 8/8]` | 60-140 | Not started |
+| [x] | 6g/8 | `🌿 [catalog-rescan] Collapse a fired pull in one movement [step 6g/8]` | 60-140 | [PR #1123](https://github.com/sesori-ai/sesori_apps_monorepo/pull/1123) merged |
+| [x] | 7/8 | `🌱 [catalog-rescan] Reconcile catalog rescan regression docs [step 7/8]` | 80-160 | [PR #1122](https://github.com/sesori-ai/sesori_apps_monorepo/pull/1122) merged |
+| [x] | 8/8 | `🌱 [catalog-rescan] Verify and retire the catalog rescan plan [step 8/8]` | 60-140 | This PR |
 
 ## Step 1 Checklist
 
@@ -261,13 +262,17 @@
 
 ## Step 8 Checklist
 
-- [ ] Run the recorded L3 matrix including both ownership branches, the
+- [x] Run the recorded L3 matrix including both ownership branches, the
   two-harness mixed outcome, the older-bridge compatibility run, and the
-  reconnect recovery run.
-- [ ] Record every entry as passed, blocked, or an explicitly accepted
-  reduction.
-- [ ] Move the plan directory to `.plan/completed/catalog-rescan/`.
-- [ ] Close or update issue #961 with the outcome.
+  reconnect recovery run. **Partly.** Four rows were run end to end; the rest
+  hold only at test level. See the disposition below.
+- [x] Record every entry as passed, blocked, or an explicitly accepted
+  reduction. Four passed; seven accepted as a reduction by the owner on
+  2026-08-26.
+- [x] Move the plan directory to `.plan/completed/catalog-rescan/`.
+- [ ] Close or update issue #961 with the outcome. **Left to the owner:** a
+  comment is drafted; the issue stays open until the fix ships, since it is on
+  `main` and not in 1.8.1.
 
 ## Plan Review
 
@@ -767,4 +772,78 @@ duplicate-emission nicety.
   that is how these documents already express coverage. Every dimension in the
   plan's table maps to an entry; the setup-blocked harness lives in
   `plugin-setup-and-lifecycle.md`, where 6c put it
-- **Final disposition:** pending
+- **Step 6g origin:** owner report — releasing a fired pull parked the list an
+  indicator's height below the top before collapsing. The control reserves that
+  height when it arms its task and returns it when the task is done, and 6f made
+  the task finish on release, so the reserve survived just long enough for the
+  spring to settle onto it. A fired pull has nothing to wait for, so its task now
+  finishes when the second stage fires. Measured: 23 frames resting at the
+  indicator height before, at most 4 after
+- **Step 6g base:** `main` at `a04ce873b4`
+- **Step 6g changed lines:** 94 of delivered code against a 60-140 estimate
+- **Step 6g verification:** `flutter analyze` clean on `client/module_prego` and
+  `client/app`; module_prego 236 tests passed (1 new, run at both pull speeds),
+  app 904 passed. The new test was confirmed to fail against the unfixed control
+  at both speeds, recording 23 frames resting at the indicator height
+- **Step 6g review:** one `chatgpt-codex-connector` finding, valid and applied —
+  the first fix worked only for a gradual pull. No architecture review: the
+  change is a single call moved earlier within one existing widget
+- **Step 6g fast path:** review caught that the first fix only worked for a
+  gradual pull. On a single-frame crossing the stage fires before the control has
+  invoked the refresh, so the release found nothing to release. The collapse test
+  now runs at both pull speeds — the gradual one passed against the unfixed fast
+  path, which is why it missed it. Second time on this control that a
+  single-frame crossing slipped past tests built from 40px increments
+- **Step 8 preparation:** the plan's status header still said "Step 1/8 plan
+  publication", named a long-gone working branch, and promised "eight PRs"; its
+  step table stopped at 6c. Corrected as part of step 8's plan-and-tracker
+  agreement check, ahead of the matrix run that step still needs
+## Step 8 Matrix Disposition
+
+Automated verification on merged `main` (`f656176f51`): `client/module_prego`
+236 passed, `client/module_core` 1,390 passed, `client/app` 904 passed, and the
+bridge catalog-import suites (repository, service, routing, console listener) 36
+passed. `flutter analyze` and `dart analyze --fatal-infos` clean throughout.
+
+Each of the eleven rows of the plan's required matrix, in its order:
+
+| # | Row | Disposition |
+|---|---|---|
+| 1 | Boundary — client end to end, plus automated delta counting | **Passed.** Owner run 2026-08-26 for the end-to-end half; `catalog_import_repository_test.dart` covers a first import reporting every row as new, a re-import reporting nothing new, and a re-import counting only rows the catalog did not hold |
+| 2 | Plugin — representative for the gesture, row, cancel, and fan-out | **Partly passed.** The owner's run covers the gesture and the row. Cancel and a multi-harness fan-out were not reported as run; both hold at test level only (`cancel fans out one request per member, including while starting`, `starts idle and fans out one request per routable harness`) |
+| 3 | Plugin — native and bridge-derived new-item counts | **Passed.** Both ownership branches are exercised directly: `native re-import counts only the rows the catalog did not already hold` and `derived import counts new rows across its own ownership branch`. Row 1's own reason grants automated coverage for counting |
+| 4 | Plugin — two harnesses for the aggregate terminal states | **Reduced to test level.** `reports a mixed outcome when one harness fails` drives a two-member fan-out through fakes, not two real harnesses |
+| 5 | Platform — one mobile platform plus the wide split-view pane | **Passed.** Owner run 2026-08-26, both surfaces |
+| 6 | Compatibility — a bridge that omits `newItems` | **Reduced to test level.** `falls back to summed totals when any harness omits its delta` constructs the completion in process; no old peer's wire payload is decoded |
+| 7 | Recovery — reconnect against retained terminal statuses | **Reduced to test level.** `a reconnect discards terminal statuses instead of announcing a stale success` |
+| 8 | Freshness — a scan that genuinely imports a new session | **Passed.** Owner run 2026-08-26: the sessions appear without a second refresh |
+| 9 | Compatibility — a bridge older than `v1.6.0` with no `/plugin/import` | **Reduced to test level.** The tests inject `CatalogImportMutationResult.notFound()` below the repository boundary; no real missing-route response is mapped |
+| 10 | Recovery — disconnect mid-scan, reconnect, and settle | **Reduced, and only in halves.** `a disconnect clears an active rescan without claiming a catalog change` covers the disconnect; `a reconnect adopts an in-flight import from the status read` covers the reconnect. No test runs the sequence end to end |
+| 11 | Setup state — a setup-blocked harness on Settings | **Reduced to test level.** `harnesses_settings_screen_test.dart` asserts no scan action is offered for the setup-blocked fixture, against a fixture rather than a blocked harness |
+
+Four rows passed as the matrix asks. Seven hold only at test level, and rows 2
+and 10 are partial even there.
+
+**Accepted reduction — owner, 2026-08-26.** Rows 2, 4, 6, 7, 9, 10 and 11 are
+accepted as verified by their tests rather than by the runs the matrix names: a
+real pre-v1.6.0 bridge, a real bridge omitting `newItems`, two real harnesses
+scanning at once, a real setup-blocked harness, a real cancellation and
+multi-harness fan-out, and one continuous disconnect-reconnect-settle. This is
+the explicit acceptance the plan requires before retirement.
+
+What that leaves unproven, stated plainly so a later reader is not misled: no
+old bridge posture has been exercised across the wire, only below the repository
+boundary; `CatalogRescanPartlyFailed` has never been produced by two real
+harnesses; and the recovery sequence is covered in two halves with the seam
+between them untested.
+
+An earlier draft of this section called all eight of its rows "passed on
+evidence, not an accepted reduction". That was wrong on both counts — it was not
+row-for-row against the plan, and substituting a unit test for a run against a
+real old bridge is a reduction whatever it is called.
+
+- **Final disposition:** retired. Every step merged, the matrix dispositioned
+  with four rows passed and seven accepted as a reduction by the owner on
+  2026-08-26, and the plan moved to `.plan/completed/catalog-rescan/`. The
+  issue #961 update is deliberately left to the owner: a comment is drafted and
+  the issue stays open, since the fix is on `main` and not in 1.8.1
