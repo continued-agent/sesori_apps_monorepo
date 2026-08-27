@@ -1011,6 +1011,7 @@ class AcpEventMapper({
         agent: pluginId,
         modelID: modelForSession(sessionId: sessionId),
         providerID: providerForSession(sessionId: sessionId),
+        sender: shared.MessageSender.agent,
         time: time == null ? null : shared.MessageTime(created: time.created, completed: time.completed),
       ).toJson(),
     );
@@ -1066,6 +1067,7 @@ class AcpEventMapper({
         agent: pluginId,
         modelID: modelForSession(sessionId: sessionId),
         providerID: providerForSession(sessionId: sessionId),
+        sender: shared.MessageSender.agent,
         time: time == null ? null : shared.MessageTime(created: time.created, completed: time.completed),
       ),
     };
