@@ -213,7 +213,7 @@ class AcpReplayCollector({
             providerID: providerId,
             variant: null,
             errorName: halt.errorName,
-            errorMessage: halt.message,
+            errorMessage: assistantText,
             time: null,
           ),
           parts: const [],

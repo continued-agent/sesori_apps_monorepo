@@ -195,6 +195,7 @@ final class PiHistoryMapper({
         model: message.model,
         variant: variant,
         stopReason: message.stopReason,
+        errorMessage: message.errorMessage,
         timestamp: message.timestamp,
       ),
       parts: parts,
@@ -639,6 +640,7 @@ final class PiHistoryMapper({
     required String? model,
     required String? variant,
     required PiAssistantStopReason? stopReason,
+    required String? errorMessage,
     required int? timestamp,
   }) {
     return switch (stopReason) {
@@ -650,7 +652,7 @@ final class PiHistoryMapper({
         providerID: provider,
         variant: variant,
         errorName: "Pi response failed",
-        errorMessage: "The Pi assistant response failed.",
+        errorMessage: errorMessage ?? "The Pi assistant response failed.",
         time: _time(timestamp),
       ),
       PiAssistantStopReason.aborted => PluginMessage.error(
@@ -661,7 +663,7 @@ final class PiHistoryMapper({
         providerID: provider,
         variant: variant,
         errorName: "Pi response aborted",
-        errorMessage: "The Pi assistant response was aborted.",
+        errorMessage: errorMessage ?? "The Pi assistant response was aborted.",
         time: _time(timestamp),
       ),
       _ => PluginMessage.assistant(

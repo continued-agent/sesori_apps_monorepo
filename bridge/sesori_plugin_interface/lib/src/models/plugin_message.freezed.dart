@@ -1995,6 +1995,8 @@ class PluginMessageError implements PluginMessage {
  final  String? providerID;
  final  String? variant;
  final  String errorName;
+/// Backend-provided error text must be preserved verbatim when present.
+/// A plugin may synthesize a fallback only when its backend supplied no text.
  final  String errorMessage;
 @override final  PluginMessageTime? time;
 
