@@ -482,5 +482,16 @@ plugin steps added the generated consumer DTOs and narrow ACP hooks; consumer
 tests pass every fixture. Cross-repository conformance and all six
 matching-native package jobs passed before publication. Runtime and Dart
 protocol-changing PRs must update and run that corpus in source/consumer order.
-Step 16 still repeats the complete product boundary with the exact managed
-artifacts pinned by the bridge.
+Step 16 passed exact-tag runtime and Dart suites, the six matching-native package
+jobs, archive inspection, a live managed install, source bridge
+lifecycle/crash/restart/history/deletion checks, the current iOS management and
+session-creation path, and the public `v1.8.1` client/bridge compatibility pair.
+Private local OpenAI- and Anthropic-compatible profiles started through the
+unmodified published adapter, appeared as distinct provider/model selections,
+and each returned terminal output under its intended pair through both the debug
+boundary and current iOS client. The authenticated client -> relay -> bridge ->
+plugin run also settled one question, permission allow-once and rejection,
+inline-image understanding, failed and completed tools, a real workspace file
+write/read with a rendered diff, and rich-history replay after bridge and app
+restart. Credentials, settings values, prompts, transcripts, provider output,
+and protocol frames remain outside committed evidence.
