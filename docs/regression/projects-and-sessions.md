@@ -135,6 +135,11 @@ child sessions with titles, activity, statuses, and unseen state.
   explicit `session_info` names, uses file modification time for activity,
   preserves resolvable parent-session lineage, and never decodes transcript
   messages to derive titles.
+- DeepSeek explicit import enumerates only adapter-owned session headers below
+  the isolated plugin state. It derives projects from normalized session `cwd`,
+  preserves parent/child metadata, and never scans or imports normal
+  `DSH_HOME/sessions`. Ordinary project/session list reads remain bridge-database
+  reads after import; adapter JSONL is not a second normal catalog source.
 - Running root sessions remain ahead of inactive roots and order by the latest
   durable user-side activity marker, descending, then session ID. Projects with
   running roots likewise remain ahead of inactive projects and order by the
@@ -251,6 +256,9 @@ leave the surface that started one. Restore harness eligibility afterwards.
 - Untested Hermes gap (remove this entry once verified): a failed or cancelled
   in-flight Hermes import was never exercised; only completed explicit imports
   and non-destructive re-imports were verified.
+- DeepSeek header mapping and isolated explicit import are automated. Live import,
+  restart identity, parent/child presentation, and tombstone no-reimport behavior
+  remain required Step 16 evidence.
 
 ## Sources
 
@@ -264,6 +272,7 @@ leave the surface that started one. Restore harness eligibility afterwards.
   `client/module_prego/lib/components/navigation/prego_sliver_refresh_control.dart`
 - Pi metadata catalog: `bridge/sesori_plugin_pi/lib/src/api/pi_session_storage_api.dart`,
   `bridge/sesori_plugin_pi/lib/src/repositories/pi_session_catalog_repository.dart`
+- DeepSeek catalog: `bridge/sesori_plugin_deepseek/lib/src/repositories/`
 - Tests: `bridge/app/test/bridge/routing/catalog_read_handlers_test.dart`,
   `bridge/app/test/bridge/repositories/project_repository_test.dart`,
   `bridge/sesori_plugin_pi/test/pi_session_storage_api_test.dart`,
