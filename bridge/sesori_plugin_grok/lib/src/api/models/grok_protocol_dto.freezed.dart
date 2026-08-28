@@ -169,8 +169,6 @@ mixin _$GrokModelMetadataDto {
 @pragma('vm:prefer-inline')
 $GrokModelMetadataDtoCopyWith<GrokModelMetadataDto> get copyWith => _$GrokModelMetadataDtoCopyWithImpl<GrokModelMetadataDto>(this as GrokModelMetadataDto, _$identity);
 
-  /// Serializes this GrokModelMetadataDto to a JSON map.
-  Map<String, dynamic> toJson();
 
 
 @override
@@ -226,7 +224,7 @@ as String?,
 
 
 /// @nodoc
-@JsonSerializable()
+@JsonSerializable(createToJson: false)
 
 class _GrokModelMetadataDto implements GrokModelMetadataDto {
   const _GrokModelMetadataDto({required this.supportsReasoningEffort,  List<GrokReasoningEffortOptionDto> reasoningEfforts = const <GrokReasoningEffortOptionDto>[], required this.reasoningEffort}): _reasoningEfforts = reasoningEfforts;
@@ -248,10 +246,7 @@ class _GrokModelMetadataDto implements GrokModelMetadataDto {
 @pragma('vm:prefer-inline')
 _$GrokModelMetadataDtoCopyWith<_GrokModelMetadataDto> get copyWith => __$GrokModelMetadataDtoCopyWithImpl<_GrokModelMetadataDto>(this, _$identity);
 
-@override
-Map<String, dynamic> toJson() {
-  return _$GrokModelMetadataDtoToJson(this, );
-}
+
 
 @override
 bool operator ==(Object other) {
@@ -315,8 +310,6 @@ mixin _$GrokModelInfoDto {
 @pragma('vm:prefer-inline')
 $GrokModelInfoDtoCopyWith<GrokModelInfoDto> get copyWith => _$GrokModelInfoDtoCopyWithImpl<GrokModelInfoDto>(this as GrokModelInfoDto, _$identity);
 
-  /// Serializes this GrokModelInfoDto to a JSON map.
-  Map<String, dynamic> toJson();
 
 
 @override
@@ -385,7 +378,7 @@ $GrokModelMetadataDtoCopyWith<$Res>? get metadata {
 
 
 /// @nodoc
-@JsonSerializable()
+@JsonSerializable(createToJson: false)
 
 class _GrokModelInfoDto implements GrokModelInfoDto {
   const _GrokModelInfoDto({required this.modelId, required this.name, required this.description, @JsonKey(name: "_meta") required this.metadata});
@@ -402,10 +395,7 @@ class _GrokModelInfoDto implements GrokModelInfoDto {
 @pragma('vm:prefer-inline')
 _$GrokModelInfoDtoCopyWith<_GrokModelInfoDto> get copyWith => __$GrokModelInfoDtoCopyWithImpl<_GrokModelInfoDto>(this, _$identity);
 
-@override
-Map<String, dynamic> toJson() {
-  return _$GrokModelInfoDtoToJson(this, );
-}
+
 
 @override
 bool operator ==(Object other) {
@@ -482,8 +472,6 @@ mixin _$GrokSessionModelStateDto {
 @pragma('vm:prefer-inline')
 $GrokSessionModelStateDtoCopyWith<GrokSessionModelStateDto> get copyWith => _$GrokSessionModelStateDtoCopyWithImpl<GrokSessionModelStateDto>(this as GrokSessionModelStateDto, _$identity);
 
-  /// Serializes this GrokSessionModelStateDto to a JSON map.
-  Map<String, dynamic> toJson();
 
 
 @override
@@ -538,7 +526,7 @@ as String?,
 
 
 /// @nodoc
-@JsonSerializable()
+@JsonSerializable(createToJson: false)
 
 class _GrokSessionModelStateDto implements GrokSessionModelStateDto {
   const _GrokSessionModelStateDto({ List<GrokModelInfoDto> availableModels = const <GrokModelInfoDto>[], required this.currentModelId}): _availableModels = availableModels;
@@ -559,10 +547,7 @@ class _GrokSessionModelStateDto implements GrokSessionModelStateDto {
 @pragma('vm:prefer-inline')
 _$GrokSessionModelStateDtoCopyWith<_GrokSessionModelStateDto> get copyWith => __$GrokSessionModelStateDtoCopyWithImpl<_GrokSessionModelStateDto>(this, _$identity);
 
-@override
-Map<String, dynamic> toJson() {
-  return _$GrokSessionModelStateDtoToJson(this, );
-}
+
 
 @override
 bool operator ==(Object other) {
@@ -612,6 +597,345 @@ as String?,
 }
 
 
+}
+
+
+/// @nodoc
+mixin _$GrokInitializeMetadataDto {
+
+ bool? get grokShell; String? get agentVersion; GrokSessionModelStateDto? get modelState;
+/// Create a copy of GrokInitializeMetadataDto
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$GrokInitializeMetadataDtoCopyWith<GrokInitializeMetadataDto> get copyWith => _$GrokInitializeMetadataDtoCopyWithImpl<GrokInitializeMetadataDto>(this as GrokInitializeMetadataDto, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is GrokInitializeMetadataDto&&(identical(other.grokShell, grokShell) || other.grokShell == grokShell)&&(identical(other.agentVersion, agentVersion) || other.agentVersion == agentVersion)&&(identical(other.modelState, modelState) || other.modelState == modelState));
+}
+
+@JsonKey(includeFromJson: false, includeToJson: false)
+@override
+int get hashCode => Object.hash(runtimeType,grokShell,agentVersion,modelState);
+
+@override
+String toString() {
+  return 'GrokInitializeMetadataDto(grokShell: $grokShell, agentVersion: $agentVersion, modelState: $modelState)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $GrokInitializeMetadataDtoCopyWith<$Res>  {
+  factory $GrokInitializeMetadataDtoCopyWith(GrokInitializeMetadataDto value, $Res Function(GrokInitializeMetadataDto) _then) = _$GrokInitializeMetadataDtoCopyWithImpl;
+@useResult
+$Res call({
+ bool? grokShell, String? agentVersion, GrokSessionModelStateDto? modelState
+});
+
+
+$GrokSessionModelStateDtoCopyWith<$Res>? get modelState;
+
+}
+/// @nodoc
+class _$GrokInitializeMetadataDtoCopyWithImpl<$Res>
+    implements $GrokInitializeMetadataDtoCopyWith<$Res> {
+  _$GrokInitializeMetadataDtoCopyWithImpl(this._self, this._then);
+
+  final GrokInitializeMetadataDto _self;
+  final $Res Function(GrokInitializeMetadataDto) _then;
+
+/// Create a copy of GrokInitializeMetadataDto
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') @override $Res call({Object? grokShell = freezed,Object? agentVersion = freezed,Object? modelState = freezed,}) {
+  return _then(GrokInitializeMetadataDto(
+grokShell: freezed == grokShell ? _self.grokShell : grokShell // ignore: cast_nullable_to_non_nullable
+as bool?,agentVersion: freezed == agentVersion ? _self.agentVersion : agentVersion // ignore: cast_nullable_to_non_nullable
+as String?,modelState: freezed == modelState ? _self.modelState : modelState // ignore: cast_nullable_to_non_nullable
+as GrokSessionModelStateDto?,
+  ));
+}
+/// Create a copy of GrokInitializeMetadataDto
+/// with the given fields replaced by the non-null parameter values.
+@override
+@pragma('vm:prefer-inline')
+$GrokSessionModelStateDtoCopyWith<$Res>? get modelState {
+    if (_self.modelState == null) {
+    return null;
+  }
+
+  return $GrokSessionModelStateDtoCopyWith<$Res>(_self.modelState!, (value) {
+    return _then(_self.copyWith(modelState: value));
+  });
+}
+}
+
+
+
+/// @nodoc
+@JsonSerializable(createToJson: false)
+
+class _GrokInitializeMetadataDto implements GrokInitializeMetadataDto {
+  const _GrokInitializeMetadataDto({required this.grokShell, required this.agentVersion, required this.modelState});
+  factory _GrokInitializeMetadataDto.fromJson(Map<String, dynamic> json) => _$GrokInitializeMetadataDtoFromJson(json);
+
+@override final  bool? grokShell;
+@override final  String? agentVersion;
+@override final  GrokSessionModelStateDto? modelState;
+
+/// Create a copy of GrokInitializeMetadataDto
+/// with the given fields replaced by the non-null parameter values.
+@override @JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+_$GrokInitializeMetadataDtoCopyWith<_GrokInitializeMetadataDto> get copyWith => __$GrokInitializeMetadataDtoCopyWithImpl<_GrokInitializeMetadataDto>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is _GrokInitializeMetadataDto&&(identical(other.grokShell, grokShell) || other.grokShell == grokShell)&&(identical(other.agentVersion, agentVersion) || other.agentVersion == agentVersion)&&(identical(other.modelState, modelState) || other.modelState == modelState));
+}
+
+@JsonKey(includeFromJson: false, includeToJson: false)
+@override
+int get hashCode => Object.hash(runtimeType,grokShell,agentVersion,modelState);
+
+@override
+String toString() {
+  return 'GrokInitializeMetadataDto(grokShell: $grokShell, agentVersion: $agentVersion, modelState: $modelState)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class _$GrokInitializeMetadataDtoCopyWith<$Res> implements $GrokInitializeMetadataDtoCopyWith<$Res> {
+  factory _$GrokInitializeMetadataDtoCopyWith(_GrokInitializeMetadataDto value, $Res Function(_GrokInitializeMetadataDto) _then) = __$GrokInitializeMetadataDtoCopyWithImpl;
+@override @useResult
+$Res call({
+ bool? grokShell, String? agentVersion, GrokSessionModelStateDto? modelState
+});
+
+
+@override $GrokSessionModelStateDtoCopyWith<$Res>? get modelState;
+
+}
+/// @nodoc
+class __$GrokInitializeMetadataDtoCopyWithImpl<$Res>
+    implements _$GrokInitializeMetadataDtoCopyWith<$Res> {
+  __$GrokInitializeMetadataDtoCopyWithImpl(this._self, this._then);
+
+  final _GrokInitializeMetadataDto _self;
+  final $Res Function(_GrokInitializeMetadataDto) _then;
+
+/// Create a copy of GrokInitializeMetadataDto
+/// with the given fields replaced by the non-null parameter values.
+@override @pragma('vm:prefer-inline') $Res call({Object? grokShell = freezed,Object? agentVersion = freezed,Object? modelState = freezed,}) {
+  return _then(_GrokInitializeMetadataDto(
+grokShell: freezed == grokShell ? _self.grokShell : grokShell // ignore: cast_nullable_to_non_nullable
+as bool?,agentVersion: freezed == agentVersion ? _self.agentVersion : agentVersion // ignore: cast_nullable_to_non_nullable
+as String?,modelState: freezed == modelState ? _self.modelState : modelState // ignore: cast_nullable_to_non_nullable
+as GrokSessionModelStateDto?,
+  ));
+}
+
+/// Create a copy of GrokInitializeMetadataDto
+/// with the given fields replaced by the non-null parameter values.
+@override
+@pragma('vm:prefer-inline')
+$GrokSessionModelStateDtoCopyWith<$Res>? get modelState {
+    if (_self.modelState == null) {
+    return null;
+  }
+
+  return $GrokSessionModelStateDtoCopyWith<$Res>(_self.modelState!, (value) {
+    return _then(_self.copyWith(modelState: value));
+  });
+}
+}
+
+
+/// @nodoc
+mixin _$GrokModelStateEnvelopeDto {
+
+@JsonKey(name: "_meta") GrokInitializeMetadataDto? get metadata; GrokSessionModelStateDto? get models;
+/// Create a copy of GrokModelStateEnvelopeDto
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$GrokModelStateEnvelopeDtoCopyWith<GrokModelStateEnvelopeDto> get copyWith => _$GrokModelStateEnvelopeDtoCopyWithImpl<GrokModelStateEnvelopeDto>(this as GrokModelStateEnvelopeDto, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is GrokModelStateEnvelopeDto&&(identical(other.metadata, metadata) || other.metadata == metadata)&&(identical(other.models, models) || other.models == models));
+}
+
+@JsonKey(includeFromJson: false, includeToJson: false)
+@override
+int get hashCode => Object.hash(runtimeType,metadata,models);
+
+@override
+String toString() {
+  return 'GrokModelStateEnvelopeDto(metadata: $metadata, models: $models)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $GrokModelStateEnvelopeDtoCopyWith<$Res>  {
+  factory $GrokModelStateEnvelopeDtoCopyWith(GrokModelStateEnvelopeDto value, $Res Function(GrokModelStateEnvelopeDto) _then) = _$GrokModelStateEnvelopeDtoCopyWithImpl;
+@useResult
+$Res call({
+@JsonKey(name: "_meta") GrokInitializeMetadataDto? metadata, GrokSessionModelStateDto? models
+});
+
+
+$GrokInitializeMetadataDtoCopyWith<$Res>? get metadata;$GrokSessionModelStateDtoCopyWith<$Res>? get models;
+
+}
+/// @nodoc
+class _$GrokModelStateEnvelopeDtoCopyWithImpl<$Res>
+    implements $GrokModelStateEnvelopeDtoCopyWith<$Res> {
+  _$GrokModelStateEnvelopeDtoCopyWithImpl(this._self, this._then);
+
+  final GrokModelStateEnvelopeDto _self;
+  final $Res Function(GrokModelStateEnvelopeDto) _then;
+
+/// Create a copy of GrokModelStateEnvelopeDto
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') @override $Res call({Object? metadata = freezed,Object? models = freezed,}) {
+  return _then(GrokModelStateEnvelopeDto(
+metadata: freezed == metadata ? _self.metadata : metadata // ignore: cast_nullable_to_non_nullable
+as GrokInitializeMetadataDto?,models: freezed == models ? _self.models : models // ignore: cast_nullable_to_non_nullable
+as GrokSessionModelStateDto?,
+  ));
+}
+/// Create a copy of GrokModelStateEnvelopeDto
+/// with the given fields replaced by the non-null parameter values.
+@override
+@pragma('vm:prefer-inline')
+$GrokInitializeMetadataDtoCopyWith<$Res>? get metadata {
+    if (_self.metadata == null) {
+    return null;
+  }
+
+  return $GrokInitializeMetadataDtoCopyWith<$Res>(_self.metadata!, (value) {
+    return _then(_self.copyWith(metadata: value));
+  });
+}/// Create a copy of GrokModelStateEnvelopeDto
+/// with the given fields replaced by the non-null parameter values.
+@override
+@pragma('vm:prefer-inline')
+$GrokSessionModelStateDtoCopyWith<$Res>? get models {
+    if (_self.models == null) {
+    return null;
+  }
+
+  return $GrokSessionModelStateDtoCopyWith<$Res>(_self.models!, (value) {
+    return _then(_self.copyWith(models: value));
+  });
+}
+}
+
+
+
+/// @nodoc
+@JsonSerializable(createToJson: false)
+
+class _GrokModelStateEnvelopeDto implements GrokModelStateEnvelopeDto {
+  const _GrokModelStateEnvelopeDto({@JsonKey(name: "_meta") required this.metadata, required this.models});
+  factory _GrokModelStateEnvelopeDto.fromJson(Map<String, dynamic> json) => _$GrokModelStateEnvelopeDtoFromJson(json);
+
+@override@JsonKey(name: "_meta") final  GrokInitializeMetadataDto? metadata;
+@override final  GrokSessionModelStateDto? models;
+
+/// Create a copy of GrokModelStateEnvelopeDto
+/// with the given fields replaced by the non-null parameter values.
+@override @JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+_$GrokModelStateEnvelopeDtoCopyWith<_GrokModelStateEnvelopeDto> get copyWith => __$GrokModelStateEnvelopeDtoCopyWithImpl<_GrokModelStateEnvelopeDto>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is _GrokModelStateEnvelopeDto&&(identical(other.metadata, metadata) || other.metadata == metadata)&&(identical(other.models, models) || other.models == models));
+}
+
+@JsonKey(includeFromJson: false, includeToJson: false)
+@override
+int get hashCode => Object.hash(runtimeType,metadata,models);
+
+@override
+String toString() {
+  return 'GrokModelStateEnvelopeDto(metadata: $metadata, models: $models)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class _$GrokModelStateEnvelopeDtoCopyWith<$Res> implements $GrokModelStateEnvelopeDtoCopyWith<$Res> {
+  factory _$GrokModelStateEnvelopeDtoCopyWith(_GrokModelStateEnvelopeDto value, $Res Function(_GrokModelStateEnvelopeDto) _then) = __$GrokModelStateEnvelopeDtoCopyWithImpl;
+@override @useResult
+$Res call({
+@JsonKey(name: "_meta") GrokInitializeMetadataDto? metadata, GrokSessionModelStateDto? models
+});
+
+
+@override $GrokInitializeMetadataDtoCopyWith<$Res>? get metadata;@override $GrokSessionModelStateDtoCopyWith<$Res>? get models;
+
+}
+/// @nodoc
+class __$GrokModelStateEnvelopeDtoCopyWithImpl<$Res>
+    implements _$GrokModelStateEnvelopeDtoCopyWith<$Res> {
+  __$GrokModelStateEnvelopeDtoCopyWithImpl(this._self, this._then);
+
+  final _GrokModelStateEnvelopeDto _self;
+  final $Res Function(_GrokModelStateEnvelopeDto) _then;
+
+/// Create a copy of GrokModelStateEnvelopeDto
+/// with the given fields replaced by the non-null parameter values.
+@override @pragma('vm:prefer-inline') $Res call({Object? metadata = freezed,Object? models = freezed,}) {
+  return _then(_GrokModelStateEnvelopeDto(
+metadata: freezed == metadata ? _self.metadata : metadata // ignore: cast_nullable_to_non_nullable
+as GrokInitializeMetadataDto?,models: freezed == models ? _self.models : models // ignore: cast_nullable_to_non_nullable
+as GrokSessionModelStateDto?,
+  ));
+}
+
+/// Create a copy of GrokModelStateEnvelopeDto
+/// with the given fields replaced by the non-null parameter values.
+@override
+@pragma('vm:prefer-inline')
+$GrokInitializeMetadataDtoCopyWith<$Res>? get metadata {
+    if (_self.metadata == null) {
+    return null;
+  }
+
+  return $GrokInitializeMetadataDtoCopyWith<$Res>(_self.metadata!, (value) {
+    return _then(_self.copyWith(metadata: value));
+  });
+}/// Create a copy of GrokModelStateEnvelopeDto
+/// with the given fields replaced by the non-null parameter values.
+@override
+@pragma('vm:prefer-inline')
+$GrokSessionModelStateDtoCopyWith<$Res>? get models {
+    if (_self.models == null) {
+    return null;
+  }
+
+  return $GrokSessionModelStateDtoCopyWith<$Res>(_self.models!, (value) {
+    return _then(_self.copyWith(models: value));
+  });
+}
 }
 
 // dart format on
