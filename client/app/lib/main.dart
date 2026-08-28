@@ -13,6 +13,7 @@ import "package:material_ui/material_ui.dart";
 import "package:sesori_dart_core/sesori_dart_core.dart";
 import "package:theme_prego/module_prego.dart";
 
+import "core/di/analytics_runtime_bootstrap.dart";
 import "core/di/injection.dart";
 import "core/extensions/appearance_mode_x.dart";
 import "core/extensions/build_context_x.dart";
@@ -72,19 +73,21 @@ void main() async {
   await bootstrapSesoriApp(
     shouldInitializeFirebase: shouldInitializeFirebase,
     configureDependenciesFn: () async {
-      await configureDependencies(
+      final analyticsBootstrap = await configureDependencies(
         firebaseEnabled: shouldInitializeFirebase,
-        createAnalyticsRuntimeCapability: ({required authSession}) => _createAnalyticsRuntimeCapability(
+        createAnalyticsRuntimeBootstrap: ({required crawlGateService}) => _createAnalyticsRuntimeBootstrap(
           shouldInitializeFirebase: shouldInitializeFirebase,
           supportsFirebaseAnalytics: supportsFirebaseAnalytics,
-          authSession: authSession,
+          crawlGateService: crawlGateService,
         ),
       );
       _configureFirebaseSdk(
         supportsCrashlytics: supportsFirebaseCrashlytics,
       );
+      return analyticsBootstrap;
     },
-    startSingularAttributionFn: _startSingularAttribution,
+    prepareSingularAttributionFn: _prepareSingularAttribution,
+    applySingularCrawlGateFn: _applySingularCrawlGate,
     initializeDeepLinks: () => getIt<DeepLinkService>().init(),
     startProductAnalyticsFn: () => getIt<ProductAnalyticsService>().start(),
     startAnalyticsRouteListenerFn: () => getIt<AnalyticsRouteListener>().start(),
@@ -103,8 +106,9 @@ void main() async {
 
 Future<void> bootstrapSesoriApp({
   required bool shouldInitializeFirebase,
-  required Future<void> Function() configureDependenciesFn,
-  required Future<void> Function() startSingularAttributionFn,
+  required Future<AnalyticsRuntimeBootstrap> Function() configureDependenciesFn,
+  required void Function() prepareSingularAttributionFn,
+  required void Function({required AnalyticsStoreCrawlGate crawlGate}) applySingularCrawlGateFn,
   required void Function() initializeDeepLinks,
   required Future<void> Function() startProductAnalyticsFn,
   required Future<void> Function() startAnalyticsRouteListenerFn,
@@ -113,12 +117,8 @@ Future<void> bootstrapSesoriApp({
   required Future<ChatInputMode> Function() readChatInputModeFn,
   required void Function(Widget app) runAppFn,
 }) async {
-  await configureDependenciesFn();
-  try {
-    await startSingularAttributionFn();
-  } on Object catch (error, stackTrace) {
-    logw("Error bootstrapping Singular attribution", error, stackTrace);
-  }
+  final analyticsBootstrap = await configureDependenciesFn();
+  prepareSingularAttributionFn();
   initializeDeepLinks();
   await startProductAnalyticsFn();
   await startAnalyticsRouteListenerFn();
@@ -162,79 +162,94 @@ Future<void> bootstrapSesoriApp({
       ),
     ),
   );
+
+  unawaited(
+    _completeAnalyticsStartup(
+      crawlGate: analyticsBootstrap.crawlGate,
+      applySingularCrawlGateFn: applySingularCrawlGateFn,
+    ),
+  );
 }
 
-Future<AnalyticsRuntimeCapability> _createAnalyticsRuntimeCapability({
+Future<void> _completeAnalyticsStartup({
+  required Future<AnalyticsStoreCrawlGate> crawlGate,
+  required void Function({required AnalyticsStoreCrawlGate crawlGate}) applySingularCrawlGateFn,
+}) async {
+  try {
+    applySingularCrawlGateFn(crawlGate: await crawlGate);
+  } on Object catch (error, stackTrace) {
+    logw("Error completing analytics startup", error, stackTrace);
+  }
+}
+
+Future<AnalyticsRuntimeBootstrap> _createAnalyticsRuntimeBootstrap({
   required bool shouldInitializeFirebase,
   required bool supportsFirebaseAnalytics,
-  required AuthSession authSession,
+  required AnalyticsCrawlGateService crawlGateService,
 }) async {
   if (!shouldInitializeFirebase || !supportsFirebaseAnalytics) {
-    return const AnalyticsRuntimeCapability.disabled(
-      reason: AnalyticsRuntimeDisabledReason.analyticsSinkUnavailable,
+    return AnalyticsRuntimeBootstrap(
+      capability: const AnalyticsRuntimeCapability.disabled(
+        reason: AnalyticsRuntimeDisabledReason.analyticsSinkUnavailable,
+      ),
+      crawlGate: Future.value(AnalyticsStoreCrawlGate.allow),
     );
   }
-  final capability = await getIt<FirebaseAnalyticsStartup>().configure(
-    ineligibilityReason: _measurementIneligibilityReason(),
-    suspendForStoreCrawl: await _isUnauthenticatedInsideCrawlWindow(authSession: authSession),
-  );
+
+  final ineligibilityReason = _measurementIneligibilityReason();
+  final analyticsStartup = getIt<FirebaseAnalyticsStartup>();
+  final capability = await analyticsStartup.prepare(ineligibilityReason: ineligibilityReason);
   if (capability case AnalyticsRuntimeDisabled(:final reason)) {
     logi("Firebase analytics runtime disabled (${reason.name})");
+    return AnalyticsRuntimeBootstrap(
+      capability: capability,
+      crawlGate: Future.value(AnalyticsStoreCrawlGate.allow),
+    );
   }
-  return capability;
+
+  return AnalyticsRuntimeBootstrap(
+    capability: capability,
+    crawlGate: _resolveAndApplyAnalyticsCrawlGate(
+      analyticsStartup: analyticsStartup,
+      crawlGateService: crawlGateService,
+      eligibility: defaultTargetPlatform == TargetPlatform.android
+          ? AnalyticsCrawlGateEligibility.eligibleRelease
+          : AnalyticsCrawlGateEligibility.ineligible,
+    ),
+  );
 }
 
-Future<void> _startSingularAttribution() async {
-  getIt<SingularAttributionStartup>().start(
+Future<AnalyticsStoreCrawlGate> _resolveAndApplyAnalyticsCrawlGate({
+  required FirebaseAnalyticsStartup analyticsStartup,
+  required AnalyticsCrawlGateService crawlGateService,
+  required AnalyticsCrawlGateEligibility eligibility,
+}) async {
+  var crawlGate = AnalyticsStoreCrawlGate.allow;
+  try {
+    crawlGate = await crawlGateService.resolve(eligibility: eligibility);
+  } on Object catch (error, stackTrace) {
+    logw("Failed to resolve the analytics store-crawl gate; allowing analytics", error, stackTrace);
+  }
+  await analyticsStartup.applyCrawlGate(crawlGate: crawlGate);
+  return crawlGate;
+}
+
+void _prepareSingularAttribution() {
+  getIt<SingularAttributionStartup>().prepare(
     isSupportedPlatform: _supportsSingular,
     ineligibilityReason: _measurementIneligibilityReason(),
-    deferUntilInteractiveAuthentication:
-        await _isUnauthenticatedInsideCrawlWindow(authSession: getIt<AuthSession>()),
     sdkKey: _singularSdkKeyDefine,
     sdkSecret: _singularSdkSecretDefine,
   );
 }
 
-/// Unix seconds at which the release lanes compiled this binary. Builds made
-/// outside those lanes leave it 0, which reads as a build too old for a store
-/// crawl to still be running it.
-const _buildEpochSeconds = int.fromEnvironment("SESORI_BUILD_EPOCH_SECONDS");
-
-/// How long after compilation a store may still be crawling the binary. Play
-/// runs its pre-launch report against every track upload "subject to capacity"
-/// and documents results arriving up to a day later; two hours proved too
-/// short in practice, so this doubles that documented ceiling. The width only
-/// delays anonymous installs of a fresh binary: an authenticated launch, or an
-/// interactive login inside the window, reports regardless.
-const _buildWindow = Duration(hours: 48);
-
-/// Whether a binary stamped at [buildEpochSeconds] could still be under a store
-/// pre-launch crawl at [now]. A clock behind the stamp says nothing about the
-/// crawl, so it reads as outside the window.
-bool isWithinBuildWindow({required int buildEpochSeconds, required DateTime now}) {
-  if (buildEpochSeconds <= 0) return false;
-  final buildTime = DateTime.fromMillisecondsSinceEpoch(buildEpochSeconds * 1000, isUtc: true);
-  return !now.isBefore(buildTime) && now.isBefore(buildTime.add(_buildWindow));
+void _applySingularCrawlGate({required AnalyticsStoreCrawlGate crawlGate}) {
+  getIt<SingularAttributionStartup>().applyCrawlGate(crawlGate: crawlGate);
 }
 
 /// Why this process must never report analytics, or null when it may.
 AnalyticsRuntimeDisabledReason? _measurementIneligibilityReason() =>
     kReleaseMode ? null : AnalyticsRuntimeDisabledReason.debugOrProfile;
-
-/// Whether this process may be a Play pre-launch crawl and must keep the
-/// measurement SDKs suspended until a person proves otherwise.
-///
-/// Play's pre-launch report is the only store process that launches the app
-/// after an upload; TestFlight runs nothing, so only Android is gated. Crawlers
-/// never sign in, so an unauthenticated launch inside the build window is
-/// treated as one. A signed-in device reports at any time, and a
-/// server-confirmed interactive login lifts the suspension for the rest of
-/// the process.
-Future<bool> _isUnauthenticatedInsideCrawlWindow({required AuthSession authSession}) async {
-  return defaultTargetPlatform == TargetPlatform.android &&
-      isWithinBuildWindow(buildEpochSeconds: _buildEpochSeconds, now: DateTime.now()) &&
-      !await authSession.hasLocallyValidSession();
-}
 
 Future<void> startNotificationStartup({
   required LocalNotificationClient localNotificationClient,
