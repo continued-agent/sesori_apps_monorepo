@@ -129,8 +129,6 @@ void main() {
               AcpReplayCollector(
                   sessionId: "s1",
                   agentId: "Cursor",
-                  modelId: null,
-                  providerId: null,
                   initialUserMessageId: "s1-initial-user",
                   messageIdOverride: null,
                   messageTimeResolver: null,
@@ -174,8 +172,6 @@ void main() {
           AcpReplayCollector(
               sessionId: "s1",
               agentId: "Cursor",
-              modelId: "gpt-5.5",
-              providerId: "cursor",
               initialUserMessageId: null,
               messageIdOverride: null,
               messageTimeResolver: null,
@@ -211,7 +207,11 @@ void main() {
               }),
             );
 
-      final messages = collector.build();
+      final messages = collector.buildWithAssistantSelection(
+        modelId: "gpt-5.5",
+        providerId: "cursor",
+        variant: null,
+      );
       expect(messages, hasLength(3));
 
       final user = messages.first;
@@ -401,13 +401,11 @@ void main() {
       expect(toolPart.state.title, isNull);
     });
 
-    test("stamps replayed assistant messages with the loaded session model", () {
+    test("stamps replayed assistant messages with the loaded session selection", () {
       final collector =
           AcpReplayCollector(
             sessionId: "s1",
             agentId: "Cursor",
-            modelId: "claude-opus-4-8",
-            providerId: "cursor",
             initialUserMessageId: null,
             messageIdOverride: null,
             messageTimeResolver: null,
@@ -418,9 +416,19 @@ void main() {
               "content": {"type": "text", "text": "hi"},
             }),
           );
-      final assistant = collector.build().single.info as PluginMessageAssistant;
+      final assistant =
+          collector
+                  .buildWithAssistantSelection(
+                    modelId: "claude-opus-4-8",
+                    providerId: "cursor",
+                    variant: "high",
+                  )
+                  .single
+                  .info
+              as PluginMessageAssistant;
       expect(assistant.modelID, "claude-opus-4-8");
       expect(assistant.providerID, "cursor");
+      expect(assistant.variant, "high");
     });
 
     test("a messageId change splits consecutive same-role chunks into two messages", () {
@@ -871,8 +879,6 @@ void main() {
           AcpReplayCollector(
             sessionId: "s1",
             agentId: "Cursor",
-            modelId: "claude-fable-5",
-            providerId: "cursor",
             initialUserMessageId: null,
             messageIdOverride: null,
             messageTimeResolver: null,
@@ -885,7 +891,13 @@ void main() {
             }),
           );
 
-      final message = collector.build().single;
+      final message = collector
+          .buildWithAssistantSelection(
+            modelId: "claude-fable-5",
+            providerId: "cursor",
+            variant: null,
+          )
+          .single;
       expect(message.info, isA<PluginMessageError>());
       expect((message.info as PluginMessageError).errorMessage, "\n\nCheck your settings to continue");
       expect(message.parts, isEmpty);
