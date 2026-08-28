@@ -29,6 +29,13 @@ reaches the backend so the turn continues.
   persist process-local dialog promises. Decorative extension UI is ignored;
   bounded `notify` messages use the existing toast event attributed to their
   owning session, so another session or an unrelated route does not present them.
+- GitHub Copilot uses standard ACP permission requests correlated to their tool
+  call. The client always presents Once and Reject for a pending permission and
+  presents Always only when the request offers `allow_always`. The registry maps
+  a choice to an exact offered ACP option; if Once or Reject has no matching
+  option, it cancels rather than escalating or selecting another scope. The
+  pinned CLI does not forward `ask_user` over ACP, so Copilot declares no
+  question capability and Sesori never invents a custom question channel.
 - DeepSeek standard ACP permissions use the request's explicit session ID when
   present and retain the ACP active-turn fallback when an agent omits it. They
   preserve the exact tool call ID and expose only the scopes the adapter offers;
@@ -76,7 +83,7 @@ reaches the backend so the turn continues.
 |---|---|
 | L1 Smoke | Live plugin, one representative plugin: a permission raised by a real turn appears as pending and one reply lets the turn proceed. |
 | L2 Routine | Live plugin, representative: question variants (single, multiple, custom, reject), typed ACP scalar forms where supported, unsupported-form decline, abort cancellation, per-session and per-project pending listing, repeated or unknown request ids answered without corrupting state. Automated Pi coverage: select/confirm/input/editor exact replies and timeout cleanup. Automated DeepSeek coverage: exact two-session question correlation, permission once/reject, ordered multi/custom/free-form and plan-review answers, invalid-answer settlement, abort, late reply, and disposal. |
-| L3 Release | Client end to end on the release-target client platform, every supporting production plugin: both request kinds per plugin, per-plugin "always" availability, child attribution, archived-session refusal, and pending requests suppressing completion notifications until resolved. |
+| L3 Release | Client end to end on the release-target client platform, every supporting production plugin: every request kind the plugin exposes, per-plugin "always" availability, child attribution, archived-session refusal, and pending requests suppressing completion notifications until resolved. Copilot covers the always-visible Once/Reject actions, Always only when advertised, exact selected-or-cancelled ACP outcomes, and an honestly absent question capability. |
 | L4 Extended | Relay integration, every supporting production plugin: per-session empty lists while stopped or terminally failed, project-wide question unavailability with no active plugin, pending state re-read after restart, competing replies to one request, two logical clients observing one request and its retirement, and reconnect inside the replay window. |
 | L5 Full | Headless bridge and live plugin for malformed requests and degenerate option sets; packaged or external on alternate client platforms for an older bridge not declaring "always". Every supporting production plugin where applicable. |
 
@@ -86,7 +93,11 @@ Vary which backend raises the request and how it is provoked, the answer kind,
 the answer order when several are outstanding, and whether the answer comes from
 the request's own session view, a parent view, or a second client. Vary whether
 the session is fresh, resumed after a bridge restart, or reopened cold. Prefer a
-different combination than the previous recorded run.
+different combination than the previous recorded run. For Copilot, provoke a
+real tool permission, exercise Once and Reject plus Always when surfaced, include
+an upstream option set lacking `allow_once` or reject to confirm safe
+cancellation, abort with a request pending, and confirm the management/session
+capability surfaces do not claim questions.
 
 ## Failure Signals
 
@@ -120,6 +131,8 @@ different combination than the previous recorded run.
   marker, or an auto-approved permission reply advances it.
 - Reading pending state starts an intentionally stopped backend.
 - An archived session accepts a reply.
+- Copilot offers a question surface or waits for a Sesori answer to an upstream
+  `ask_user` interaction that the CLI did not forward over ACP.
 
 ## Known Limitations
 
@@ -129,6 +142,11 @@ different combination than the previous recorded run.
 - Plugin scope follows currently registered plugins and their declared
   capabilities, not a fixed list. A plugin that does not expose a request kind
   is not a failure.
+- GitHub Copilot CLI currently does not forward `ask_user` over ACP
+  (`github/copilot-cli#2109`); only its standard permission requests are in scope.
+- The shared client models only whether Always is available. Once and Reject stay
+  visible even when an unusual ACP request omits their exact option; choosing one
+  then cancels safely rather than selecting a broader or different scope.
 - Untested Hermes gap (remove this entry once verified): no Hermes permission
   request was ever observed. The tested provider completed file tools without
   emitting an ACP permission request, so once/reject/always handling and
@@ -139,5 +157,7 @@ different combination than the previous recorded run.
 - Bridge pending-interaction and archived-validator services; per-plugin
   approval registries; shared pending permission/question and reply models.
 - Client permission and question surfaces and their auto-dismiss behavior.
+- `bridge/sesori_plugin_copilot/lib/src/copilot_plugin_impl.dart` and the shared
+  ACP approval registry.
 - Owning tests for pending interaction, reply routes, and pending state without
   a started backend.
