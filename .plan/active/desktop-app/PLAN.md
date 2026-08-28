@@ -3,7 +3,7 @@
 ## Status
 
 - **Plan slug:** `desktop-app`
-- **Status:** Active — step 3/22 (`BridgeProcessService`)
+- **Status:** Active — step 4/22 (exit-code state machine + prompt answers)
 - **Plan date:** 2026-08-28
 - **Repository:** `sesori-ai/sesori_apps_monorepo`
 - **Current implementation base:** `main`
@@ -218,8 +218,9 @@ binary resolution for dev builds (explicit configured path with a
 repo-sensible default); bundled-layout resolution is distribution-plan scope.
 First real GUI↔helper handshake since the prior plan's wire verification.
 
-**Step 4 — 🚧 Exit-code state machine + prompt answers.** In
-`BridgeProcessService`: 86→immediate respawn; 87→stop with login-required —
+**Step 4 — 🚧 Exit-code state machine + prompt answers.** Shared
+`BridgeSupervisedExitCode` drives both products: 86→immediate respawn;
+87→stop with login-required —
 and a successful sign-in restarts a helper whose desired state was On (a
 manual Off stays off), covered by the state-machine tests;
 88→stop with "another bridge is running" + Take-over; 0/expected→stop;
@@ -232,13 +233,16 @@ already guarantees the sentinel (the 86 latch at handoff plus the shutdown
 coordinator's budgeted backstop with emergency plugin disposal — verified for
 the restart path in step 5); exit 86 stays the single restart contract. Adds **`ControlCommandService`** (Layer 3): the
 owner of **conversational** GUI→helper sends (`prompt_response` here;
-`unregister_and_exit` in step 11) over `ControlChannelServer`, clearing
-answered prompts from `BridgePromptTracker` — cubits never touch the Layer-4
+`unregister_and_exit` in step 11). It validates the exact tracked prompt
+instance, then sends through the Layer-2 command repository and Layer-1 control
+API before clearing `BridgePromptTracker` — cubits never touch the Layer-4
 dispatcher, and the dispatcher stays inbound-only. The expected-stop
 `shutdown` frame is deliberately NOT here: it belongs to the process
 repository's atomic stop operation (step 2), keeping that operation in one
 owner. Includes hidden-boot render
 policy: contention during a silent autostart surfaces as state, never a modal.
+*Overage: ~1.8k changed lines after review-driven lifecycle-race,
+expected-exit ownership, prompt-ownership, and shared-contract hardening.*
 
 ### M2 — Control surface
 

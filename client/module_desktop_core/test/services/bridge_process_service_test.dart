@@ -3,6 +3,7 @@ import "dart:convert";
 import "dart:io";
 
 import "package:mocktail/mocktail.dart";
+import "package:rxdart/rxdart.dart";
 import "package:sesori_dart_core/sesori_dart_core.dart";
 import "package:sesori_desktop_core/sesori_desktop_core.dart";
 import "package:sesori_shared/sesori_shared.dart";
@@ -13,9 +14,11 @@ void main() {
     late _ProcessStreamsFixture streams;
     late _FakeBridgeProcessRepository repository;
     late _FakeBridgeProcessLogTracker logTracker;
+    late BridgeStatusTracker statusTracker;
     late _FakeControlChannelServer controlServer;
     late _FakeAuthSession authSession;
     late _FakeBridgeExecutablePathResolver executablePathResolver;
+    late DateTime now;
     late List<String> warnings;
     late BridgeProcessService service;
 
@@ -23,27 +26,61 @@ void main() {
       streams = _ProcessStreamsFixture(pid: 42);
       repository = _FakeBridgeProcessRepository(streams: streams.value);
       logTracker = _FakeBridgeProcessLogTracker();
+      statusTracker = BridgeStatusTracker();
       controlServer = _FakeControlChannelServer();
       authSession = _FakeAuthSession(initialState: const AuthState.unauthenticated());
       executablePathResolver = _FakeBridgeExecutablePathResolver(path: "/repo/bridge");
+      now = DateTime.utc(2026, 8, 28);
       warnings = <String>[];
       service = BridgeProcessService.forTesting(
         repository: repository,
         logTracker: logTracker,
+        statusTracker: statusTracker,
         controlChannelServer: controlServer,
         authSession: authSession,
         executablePathResolver: executablePathResolver,
+        crashBackoffDelays: const <Duration>[Duration(hours: 1)],
+        stableRuntime: const Duration(minutes: 5),
+        recentLogCount: 20,
+        now: () => now,
         reportWarning: ({required String message, required Object error, required StackTrace stackTrace}) {
           warnings.add(message);
         },
       );
     });
 
+    Future<void> rebuildService({
+      required List<Duration> crashBackoffDelays,
+      required Duration stableRuntime,
+      required int recentLogCount,
+    }) async {
+      await service.dispose();
+      repository.stopCalls = 0;
+      controlServer.stopCalls = 0;
+      service = BridgeProcessService.forTesting(
+        repository: repository,
+        logTracker: logTracker,
+        statusTracker: statusTracker,
+        controlChannelServer: controlServer,
+        authSession: authSession,
+        executablePathResolver: executablePathResolver,
+        crashBackoffDelays: crashBackoffDelays,
+        stableRuntime: stableRuntime,
+        recentLogCount: recentLogCount,
+        now: () => now,
+        reportWarning: ({required String message, required Object error, required StackTrace stackTrace}) {
+          warnings.add(message);
+        },
+      );
+    }
+
     tearDown(() async {
       repository.stopError = null;
       controlServer.stopError = null;
       await service.dispose();
       await repository.disposeFake();
+      await authSession.disposeFake();
+      statusTracker.dispose();
     });
 
     test("signed-out start enters login-required without starting infrastructure", () async {
@@ -85,15 +122,21 @@ void main() {
       expect(service.state, isA<BridgeProcessStopped>());
     });
 
-    test("an observed child exit tears down the per-spawn channel", () async {
+    test("control-channel loss tears down the channel and schedules a bounded retry", () async {
       authSession.state = _authenticatedState;
       await service.start();
 
-      repository.emitExit(exitCode: 7, expected: false);
+      repository.emitExit(exitCode: 1, expected: false);
       await pumpEventQueue();
 
       expect(controlServer.stopCalls, 1);
-      expect(service.state, isA<BridgeProcessStopped>());
+      expect(
+        service.state,
+        isA<BridgeProcessCrashRetryScheduled>()
+            .having((state) => state.exitCode, "exitCode", 1)
+            .having((state) => state.crashCount, "crashCount", 1)
+            .having((state) => state.delay, "delay", const Duration(hours: 1)),
+      );
     });
 
     test("control bind failure is cleaned up and permits retry", () async {
@@ -150,6 +193,28 @@ void main() {
       expect(service.state, isA<BridgeProcessRunning>());
     });
 
+    test("rollback-generated expected exit still enters automatic startup retry", () async {
+      authSession.state = _authenticatedState;
+      await service.start();
+      logTracker.attachError = StateError("pipe attach failed");
+      repository.emitExpectedExitOnStop = true;
+      final Future<BridgeProcessState> retryScheduled = service.states.firstWhere(
+        (state) => state is BridgeProcessCrashRetryScheduled,
+      );
+
+      repository.emitExit(exitCode: 86, expected: false);
+      final BridgeProcessState retryState = await retryScheduled;
+
+      expect(repository.spawnCalls, 2);
+      expect(
+        retryState,
+        isA<BridgeProcessCrashRetryScheduled>()
+            .having((state) => state.exitCode, "exitCode", isNull)
+            .having((state) => state.crashCount, "crashCount", 1),
+      );
+      expect(service.desiredState, BridgeProcessDesiredState.on);
+    });
+
     test("exit during startup is surfaced and rolled back", () async {
       authSession.state = _authenticatedState;
       logTracker.onAttach = () {
@@ -167,8 +232,14 @@ void main() {
         ),
       );
 
+      await pumpEventQueue();
       expect(controlServer.stopCalls, greaterThanOrEqualTo(1));
-      expect(service.state, isA<BridgeProcessStopped>());
+      expect(
+        service.state,
+        isA<BridgeProcessCrashRetryScheduled>()
+            .having((state) => state.exitCode, "exitCode", 1)
+            .having((state) => state.crashCount, "crashCount", 1),
+      );
     });
 
     test("cleanup failures never replace the original startup error", () async {
@@ -181,7 +252,390 @@ void main() {
       await expectLater(service.start(), throwsA(same(attachError)));
 
       expect(warnings, hasLength(2));
-      expect(service.state, isA<BridgeProcessStopping>());
+      expect(
+        service.state,
+        isA<BridgeProcessStopping>().having((state) => state.pid, "pid", 42),
+      );
+    });
+
+    test("disposal revokes the control server while preserving the process-stop error", () async {
+      authSession.state = _authenticatedState;
+      await service.start();
+      final StateError stopError = StateError("process stop failed");
+      repository.stopError = stopError;
+      controlServer.stopError = StateError("control stop failed");
+
+      await expectLater(service.dispose(), throwsA(same(stopError)));
+
+      expect(controlServer.stopCalls, 1);
+      expect(
+        warnings,
+        contains("Failed to stop the bridge control server during disposal"),
+      );
+    });
+
+    test("exit 86 immediately respawns exactly once", () async {
+      authSession.state = _authenticatedState;
+      await service.start();
+
+      repository.emitExit(exitCode: 86, expected: false);
+      await pumpEventQueue();
+
+      expect(repository.spawnCalls, 2);
+      expect(controlServer.startCalls, 2);
+      expect(service.state, isA<BridgeProcessRunning>());
+      await pumpEventQueue();
+      expect(repository.spawnCalls, 2);
+    });
+
+    test("exit 86 during startup queues its respawn after the start slot clears", () async {
+      authSession.state = _authenticatedState;
+      logTracker.onAttach = () {
+        logTracker.onAttach = null;
+        repository.emitExit(exitCode: 86, expected: false);
+      };
+      final Future<BridgeProcessState> restarted = service.states.firstWhere(
+        (state) => state is BridgeProcessRunning,
+      );
+
+      await expectLater(
+        service.start(),
+        throwsA(isA<BridgeProcessExitedDuringStartException>()),
+      );
+      await restarted;
+
+      expect(repository.spawnCalls, 2);
+      expect(controlServer.startCalls, 2);
+      expect(service.state, isA<BridgeProcessRunning>());
+    });
+
+    test("a claimed exit followed by broken-pipe startup failure consumes one crash entry", () async {
+      authSession.state = _authenticatedState;
+      await service.start();
+      when(streams.stdin.flush).thenAnswer((_) {
+        repository.emitExit(exitCode: 9, expected: false);
+        return Future<void>.error(StateError("broken pipe"));
+      });
+      final Future<BridgeProcessState> retryScheduled = service.states.firstWhere(
+        (state) => state is BridgeProcessCrashRetryScheduled,
+      );
+
+      repository.emitExit(exitCode: 86, expected: false);
+      final BridgeProcessState retryState = await retryScheduled;
+
+      expect(repository.spawnCalls, 2);
+      expect(
+        retryState,
+        isA<BridgeProcessCrashRetryScheduled>()
+            .having((state) => state.exitCode, "exitCode", 9)
+            .having((state) => state.crashCount, "crashCount", 1),
+      );
+      await pumpEventQueue();
+      expect(service.state, same(retryState));
+      expect(warnings, contains("Bridge startup failed after its process exit was already claimed"));
+    });
+
+    test("an exit emitted before spawn returns is claimed by exactly one retry policy", () async {
+      authSession.state = _authenticatedState;
+      await service.start();
+      repository.onSpawnBeforeReturn = () {
+        repository.onSpawnBeforeReturn = null;
+        repository.emitExit(exitCode: 9, expected: false);
+      };
+      final Future<BridgeProcessState> retryScheduled = service.states.firstWhere(
+        (state) => state is BridgeProcessCrashRetryScheduled,
+      );
+
+      repository.emitExit(exitCode: 86, expected: false);
+      final BridgeProcessState retryState = await retryScheduled;
+
+      expect(repository.spawnCalls, 2);
+      expect(
+        retryState,
+        isA<BridgeProcessCrashRetryScheduled>()
+            .having((state) => state.exitCode, "exitCode", 9)
+            .having((state) => state.crashCount, "crashCount", 1),
+      );
+      await pumpEventQueue();
+      expect(service.state, same(retryState));
+    });
+
+    test("exit 87 waits for a successful sign-in before restarting desired On", () async {
+      authSession.state = _authenticatedState;
+      await service.start();
+
+      repository.emitExit(exitCode: 87, expected: false);
+      await pumpEventQueue();
+
+      expect(service.state, isA<BridgeProcessLoginRequired>());
+      expect(service.desiredState, BridgeProcessDesiredState.on);
+      expect(repository.spawnCalls, 1);
+
+      authSession.state = const AuthState.unauthenticated();
+      authSession.state = _authenticatedState;
+      await pumpEventQueue();
+
+      expect(repository.spawnCalls, 2);
+      expect(service.state, isA<BridgeProcessRunning>());
+    });
+
+    test("an authentication completed before the exit-87 event still restarts desired On", () async {
+      authSession.state = _authenticatedState;
+      await service.start();
+      authSession.state = const AuthState.unauthenticated();
+      authSession.state = _authenticatedState;
+      await pumpEventQueue(times: 2);
+      final Future<BridgeProcessState> restarted = service.states
+          .skip(1)
+          .firstWhere(
+            (state) => state is BridgeProcessRunning,
+          );
+
+      repository.emitExit(exitCode: 87, expected: false);
+      await restarted;
+
+      expect(repository.spawnCalls, 2);
+      expect(service.state, isA<BridgeProcessRunning>());
+    });
+
+    test("an authentication completed during exit-87 cleanup still restarts desired On", () async {
+      authSession.state = _authenticatedState;
+      await service.start();
+      controlServer.stopGate = Completer<void>();
+      final Future<BridgeProcessState> restarted = service.states
+          .skip(1)
+          .firstWhere(
+            (state) => state is BridgeProcessRunning,
+          );
+
+      repository.emitExit(exitCode: 87, expected: false);
+      await pumpEventQueue(times: 2);
+      authSession.state = const AuthState.unauthenticated();
+      authSession.state = _authenticatedState;
+      await pumpEventQueue(times: 2);
+      controlServer.stopGate!.complete();
+      await restarted;
+
+      expect(repository.spawnCalls, 2);
+      expect(service.state, isA<BridgeProcessRunning>());
+    });
+
+    test("manual Off while login is required prevents a later sign-in restart", () async {
+      authSession.state = _authenticatedState;
+      await service.start();
+      repository.emitExit(exitCode: 87, expected: false);
+      await pumpEventQueue();
+
+      await service.stop();
+      authSession.state = const AuthState.unauthenticated();
+      authSession.state = _authenticatedState;
+      await pumpEventQueue();
+
+      expect(service.desiredState, BridgeProcessDesiredState.off);
+      expect(service.state, isA<BridgeProcessStopped>());
+      expect(repository.spawnCalls, 1);
+    });
+
+    test("exit 88 surfaces contention and an explicit start performs a plain respawn", () async {
+      authSession.state = _authenticatedState;
+      await service.start();
+
+      repository.emitExit(exitCode: 88, expected: false);
+      await pumpEventQueue();
+
+      expect(service.state, isA<BridgeProcessContention>());
+      expect(repository.spawnCalls, 1);
+
+      await service.start();
+
+      expect(repository.spawnCalls, 2);
+      expect(service.state, isA<BridgeProcessRunning>());
+    });
+
+    test("clean exit never respawns", () async {
+      authSession.state = _authenticatedState;
+      await service.start();
+
+      repository.emitExit(exitCode: 0, expected: false);
+      await pumpEventQueue();
+
+      expect(service.state, isA<BridgeProcessStopped>());
+      expect(service.desiredState, BridgeProcessDesiredState.off);
+      expect(repository.spawnCalls, 1);
+    });
+
+    test("Start supersedes the expected marker retained by a failed Off", () async {
+      authSession.state = _authenticatedState;
+      await service.start();
+      repository.stopError = StateError("process remained alive");
+      await expectLater(service.stop(), throwsA(isA<StateError>()));
+
+      repository.stopError = null;
+      await service.start();
+      final Future<BridgeProcessState> retryScheduled = service.states.firstWhere(
+        (state) => state is BridgeProcessCrashRetryScheduled,
+      );
+      repository.emitExit(exitCode: 35, expected: true);
+      final BridgeProcessState retryState = await retryScheduled;
+
+      expect(
+        retryState,
+        isA<BridgeProcessCrashRetryScheduled>()
+            .having((state) => state.exitCode, "exitCode", 35)
+            .having((state) => state.crashCount, "crashCount", 1),
+      );
+      expect(service.desiredState, BridgeProcessDesiredState.on);
+    });
+
+    test("rapid crashes exhaust the bounded budget and surface only recent log lines", () async {
+      await rebuildService(
+        crashBackoffDelays: const <Duration>[Duration.zero, Duration.zero],
+        stableRuntime: const Duration(minutes: 5),
+        recentLogCount: 2,
+      );
+      authSession.state = _authenticatedState;
+      logTracker.entries = <BridgeProcessLogEntry>[
+        BridgeProcessLogEntry(
+          timestamp: now,
+          source: BridgeProcessLogSource.stdout,
+          message: "old",
+        ),
+        BridgeProcessLogEntry(
+          timestamp: now,
+          source: BridgeProcessLogSource.stderr,
+          message: "recent-1",
+        ),
+        BridgeProcessLogEntry(
+          timestamp: now,
+          source: BridgeProcessLogSource.stdout,
+          message: "recent-2",
+        ),
+      ];
+      await service.start();
+
+      repository.emitExit(exitCode: 11, expected: false);
+      await pumpEventQueue();
+      expect(repository.spawnCalls, 2);
+      repository.emitExit(exitCode: 12, expected: false);
+      await pumpEventQueue();
+      expect(repository.spawnCalls, 3);
+      repository.emitExit(exitCode: 13, expected: false);
+      await pumpEventQueue();
+
+      expect(
+        service.state,
+        isA<BridgeProcessCrashGiveUp>()
+            .having((state) => state.exitCode, "exitCode", 13)
+            .having((state) => state.crashCount, "crashCount", 3)
+            .having(
+              (state) => state.recentLogs.map((entry) => entry.message),
+              "recent logs",
+              <String>["recent-1", "recent-2"],
+            ),
+      );
+      await pumpEventQueue();
+      expect(repository.spawnCalls, 3);
+    });
+
+    test("a stable control-connected runtime resets the crash budget", () async {
+      await rebuildService(
+        crashBackoffDelays: const <Duration>[Duration.zero, Duration(hours: 1)],
+        stableRuntime: const Duration(minutes: 5),
+        recentLogCount: 20,
+      );
+      authSession.state = _authenticatedState;
+      await service.start();
+
+      final Future<BridgeProcessState> respawned = service.states
+          .skip(1)
+          .firstWhere((state) => state is BridgeProcessRunning);
+      repository.emitExit(exitCode: 20, expected: false);
+      await respawned;
+      expect(repository.spawnCalls, 2);
+
+      statusTracker.markHelperConnected();
+      await pumpEventQueue(times: 2);
+      now = now.add(const Duration(minutes: 6));
+      statusTracker.markHelperDisconnected();
+      await pumpEventQueue(times: 2);
+      repository.emitExit(exitCode: 21, expected: false);
+      await pumpEventQueue();
+
+      expect(repository.spawnCalls, 3);
+      expect(service.state, isA<BridgeProcessRunning>());
+    });
+
+    test("a disconnected interval does not reset the crash budget", () async {
+      await rebuildService(
+        crashBackoffDelays: const <Duration>[Duration.zero, Duration(hours: 1)],
+        stableRuntime: const Duration(minutes: 5),
+        recentLogCount: 20,
+      );
+      authSession.state = _authenticatedState;
+      await service.start();
+
+      final Future<BridgeProcessState> respawned = service.states
+          .skip(1)
+          .firstWhere((state) => state is BridgeProcessRunning);
+      repository.emitExit(exitCode: 20, expected: false);
+      await respawned;
+
+      statusTracker.markHelperConnected();
+      await pumpEventQueue(times: 2);
+      now = now.add(const Duration(minutes: 4));
+      statusTracker.markHelperDisconnected();
+      await pumpEventQueue(times: 2);
+      statusTracker.markHelperConnected();
+      await pumpEventQueue(times: 2);
+      now = now.add(const Duration(minutes: 2));
+      repository.emitExit(exitCode: 21, expected: false);
+      await pumpEventQueue();
+
+      expect(
+        service.state,
+        isA<BridgeProcessCrashRetryScheduled>()
+            .having((state) => state.crashCount, "crashCount", 2)
+            .having((state) => state.delay, "delay", const Duration(hours: 1)),
+      );
+      expect(repository.spawnCalls, 2);
+    });
+
+    test("manual Start cancels a pending retry without a delayed second helper", () async {
+      await rebuildService(
+        crashBackoffDelays: const <Duration>[Duration(milliseconds: 25)],
+        stableRuntime: const Duration(minutes: 5),
+        recentLogCount: 20,
+      );
+      authSession.state = _authenticatedState;
+      await service.start();
+      repository.emitExit(exitCode: 30, expected: false);
+      await pumpEventQueue(times: 2);
+      expect(service.state, isA<BridgeProcessCrashRetryScheduled>());
+
+      await service.start();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      expect(repository.spawnCalls, 2);
+      expect(service.state, isA<BridgeProcessRunning>());
+    });
+
+    test("manual Off cancels a pending retry", () async {
+      await rebuildService(
+        crashBackoffDelays: const <Duration>[Duration(milliseconds: 25)],
+        stableRuntime: const Duration(minutes: 5),
+        recentLogCount: 20,
+      );
+      authSession.state = _authenticatedState;
+      await service.start();
+      repository.emitExit(exitCode: 31, expected: false);
+      await pumpEventQueue(times: 2);
+      expect(service.state, isA<BridgeProcessCrashRetryScheduled>());
+
+      await service.stop();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      expect(repository.spawnCalls, 1);
+      expect(service.state, isA<BridgeProcessStopped>());
     });
   });
 
@@ -198,12 +652,18 @@ void main() {
       statusTracker: statusTracker,
       promptTracker: promptTracker,
     );
+    final _FakeAuthSession authSession = _FakeAuthSession(initialState: _authenticatedState);
     final BridgeProcessService service = BridgeProcessService.forTesting(
       repository: repository,
       logTracker: logTracker,
+      statusTracker: statusTracker,
       controlChannelServer: server,
-      authSession: _FakeAuthSession(initialState: _authenticatedState),
+      authSession: authSession,
       executablePathResolver: _FakeBridgeExecutablePathResolver(path: "/repo/bridge"),
+      crashBackoffDelays: const <Duration>[Duration(hours: 1)],
+      stableRuntime: const Duration(minutes: 5),
+      recentLogCount: 20,
+      now: DateTime.now,
       reportWarning: ({required String message, required Object error, required StackTrace stackTrace}) {},
     );
     WebSocket? socket;
@@ -215,6 +675,7 @@ void main() {
       statusTracker.dispose();
       promptTracker.dispose();
       await repository.disposeFake();
+      await authSession.disposeFake();
     });
 
     dispatcher.start();
@@ -283,6 +744,8 @@ class _FakeBridgeProcessRepository({required final BridgeProcessStreams streams}
   List<String>? arguments;
   Object? spawnError;
   Object? stopError;
+  bool emitExpectedExitOnStop = false;
+  void Function()? onSpawnBeforeReturn;
   bool _isRunning = false;
   int? _activePid;
 
@@ -311,6 +774,7 @@ class _FakeBridgeProcessRepository({required final BridgeProcessStreams streams}
     }
     _isRunning = true;
     _activePid = streams.pid;
+    onSpawnBeforeReturn?.call();
     return streams;
   }
 
@@ -320,6 +784,10 @@ class _FakeBridgeProcessRepository({required final BridgeProcessStreams streams}
     final Object? failure = stopError;
     if (failure != null) {
       throw failure;
+    }
+    if (emitExpectedExitOnStop) {
+      emitExit(exitCode: 0, expected: true);
+      return;
     }
     _isRunning = false;
     _activePid = null;
@@ -343,10 +811,14 @@ class _FakeBridgeProcessRepository({required final BridgeProcessStreams streams}
 
 class _FakeBridgeProcessLogTracker() implements BridgeProcessLogTracker {
   int attachCalls = 0;
+  List<BridgeProcessLogEntry> entries = <BridgeProcessLogEntry>[];
   Stream<List<int>>? attachedStdout;
   Stream<List<int>>? attachedStderr;
   Object? attachError;
   void Function()? onAttach;
+
+  @override
+  List<BridgeProcessLogEntry> get snapshot => List<BridgeProcessLogEntry>.unmodifiable(entries);
 
   @override
   Future<void> attach({required Stream<List<int>> stdout, required Stream<List<int>> stderr}) async {
@@ -370,6 +842,7 @@ class _FakeControlChannelServer() implements ControlChannelServer {
   bool isRunning = false;
   Object? startError;
   Object? stopError;
+  Completer<void>? stopGate;
 
   @override
   Uri get url => Uri.parse("ws://127.0.0.1:${41000 + startCalls}");
@@ -391,6 +864,10 @@ class _FakeControlChannelServer() implements ControlChannelServer {
   Future<void> stop() async {
     stopCalls++;
     isRunning = false;
+    final Completer<void>? gate = stopGate;
+    if (gate != null) {
+      await gate.future;
+    }
     final Object? failure = stopError;
     if (failure != null) {
       throw failure;
@@ -402,10 +879,23 @@ class _FakeControlChannelServer() implements ControlChannelServer {
 }
 
 class _FakeAuthSession({required AuthState initialState}) implements AuthSession {
-  AuthState state = initialState;
+  late final BehaviorSubject<AuthState> _states;
+
+  this {
+    _states = BehaviorSubject<AuthState>.seeded(initialState);
+  }
+
+  AuthState get state => _states.value;
+
+  set state(AuthState value) => _states.add(value);
+
+  @override
+  ValueStream<AuthState> get authStateStream => _states.stream;
 
   @override
   AuthState get currentState => state;
+
+  Future<void> disposeFake() => _states.close();
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
